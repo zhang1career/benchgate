@@ -1,0 +1,229 @@
+"""Transport layer (Bridge): isolates drivers from pyvisa / pyserial.
+
+Only two transports exist:
+
+* ``VisaTransport``   — message-based SCPI instruments (oscilloscope).
+* ``SerialTransport`` — raw serial; used both by passive telemetry DMMs and by
+  prompt-driven shells (TARS). Interactive framing lives in the driver, not here.
+
+Third-party libraries are imported lazily so the package imports without the
+optional ``[lab]`` extra installed.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from .errors import (
+    InstrumentConnectionError,
+    TimeoutInstrumentError,
+    TransientInstrumentError,
+)
+
+
+def _require(module: str, extra: str = "lab"):
+    try:
+        return __import__(module)
+    except ImportError as exc:  # pragma: no cover - exercised only without extras
+        raise InstrumentConnectionError(
+            f"'{module}' is required; install with: pip install benchgate[{extra}]"
+        ) from exc
+
+
+class VisaTransport:
+    """Thin wrapper over a pyvisa MessageBasedResource."""
+
+    def __init__(
+        self,
+        address: str,
+        *,
+        timeout_ms: int = 10_000,
+        backend: str | None = None,
+        read_termination: str = "\n",
+        write_termination: str = "\n",
+    ) -> None:
+        self.address = address
+        self.timeout_ms = timeout_ms
+        # None -> ResourceManager() (NI-VISA / system backend). "@py" forces
+        # pyvisa-py. DS1104Z over USB is validated only on the system backend.
+        self.backend = backend
+        self.read_termination = read_termination
+        self.write_termination = write_termination
+        self._rm: Any = None
+        self._res: Any = None
+
+    @property
+    def is_open(self) -> bool:
+        return self._res is not None
+
+    def open(self) -> None:
+        pyvisa = _require("pyvisa")
+        try:
+            self._rm = pyvisa.ResourceManager(self.backend) if self.backend else pyvisa.ResourceManager()
+            self._res = self._rm.open_resource(self.address)
+        except Exception as exc:
+            raise InstrumentConnectionError(f"VISA open failed for {self.address}: {exc}") from exc
+        self._res.timeout = self.timeout_ms
+        self._res.read_termination = self.read_termination
+        self._res.write_termination = self.write_termination
+
+    def close(self) -> None:
+        for dev in (self._res, self._rm):
+            if dev is not None:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+        self._res = None
+        self._rm = None
+
+    def _wrap(self, exc: Exception) -> TransientInstrumentError:
+        name = type(exc).__name__.lower()
+        if "timeout" in name or "timeout" in str(exc).lower():
+            return TimeoutInstrumentError(str(exc))
+        return TransientInstrumentError(str(exc))
+
+    def write(self, cmd: str) -> None:
+        try:
+            self._res.write(cmd)
+        except Exception as exc:
+            raise self._wrap(exc) from exc
+
+    def query(self, cmd: str) -> str:
+        try:
+            return self._res.query(cmd)
+        except Exception as exc:
+            raise self._wrap(exc) from exc
+
+    def query_binary_values(self, cmd: str, **kwargs: Any):
+        try:
+            return self._res.query_binary_values(cmd, **kwargs)
+        except Exception as exc:
+            raise self._wrap(exc) from exc
+
+    def read_raw(self) -> bytes:
+        try:
+            return self._res.read_raw()
+        except Exception as exc:
+            raise self._wrap(exc) from exc
+
+
+class SerialTransport:
+    """Wrapper over pyserial. Friendly params translated lazily to constants."""
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        baud: int = 9600,
+        bytesize: int = 8,
+        parity: str = "N",
+        stopbits: float = 1,
+        timeout_s: float = 1.0,
+        dtr: bool | None = None,
+        rts: bool | None = None,
+    ) -> None:
+        self.port = port
+        self.baud = baud
+        self.bytesize = bytesize
+        self.parity = parity.upper()
+        self.stopbits = stopbits
+        self.timeout_s = timeout_s
+        self.dtr = dtr
+        self.rts = rts
+        self._ser: Any = None
+
+    @property
+    def is_open(self) -> bool:
+        return self._ser is not None and getattr(self._ser, "is_open", False)
+
+    def open(self) -> None:
+        serial = _require("serial")
+        bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS, 7: serial.SEVENBITS, 8: serial.EIGHTBITS}
+        parity_map = {
+            "N": serial.PARITY_NONE,
+            "E": serial.PARITY_EVEN,
+            "O": serial.PARITY_ODD,
+            "M": serial.PARITY_MARK,
+            "S": serial.PARITY_SPACE,
+        }
+        stopbits_map = {
+            1: serial.STOPBITS_ONE,
+            1.5: serial.STOPBITS_ONE_POINT_FIVE,
+            2: serial.STOPBITS_TWO,
+        }
+        try:
+            self._ser = serial.Serial(
+                self.port,
+                self.baud,
+                bytesize=bytesize_map[self.bytesize],
+                parity=parity_map[self.parity],
+                stopbits=stopbits_map[self.stopbits],
+                timeout=self.timeout_s,
+            )
+            if self.dtr is not None:
+                self._ser.dtr = self.dtr
+            if self.rts is not None:
+                self._ser.rts = self.rts
+        except KeyError as exc:
+            raise InstrumentConnectionError(f"Unsupported serial parameter: {exc}") from exc
+        except Exception as exc:
+            raise InstrumentConnectionError(f"Serial open failed for {self.port}: {exc}") from exc
+
+    def close(self) -> None:
+        if self._ser is not None:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+        self._ser = None
+
+    def set_dtr(self, value: bool) -> None:
+        self._ser.dtr = value
+
+    def set_rts(self, value: bool) -> None:
+        self._ser.rts = value
+
+    def flush_input(self) -> None:
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+
+    def write(self, data: bytes | str) -> None:
+        if isinstance(data, str):
+            data = data.encode("ascii")
+        try:
+            self._ser.write(data)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial write failed: {exc}") from exc
+
+    def read(self, size: int) -> bytes:
+        try:
+            return self._ser.read(size)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial read failed: {exc}") from exc
+
+    def read_until(self, expected: bytes, *, max_bytes: int = 4096) -> bytes:
+        try:
+            return self._ser.read_until(expected, max_bytes)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial read_until failed: {exc}") from exc
+
+    def read_line(self) -> bytes:
+        return self.read_until(b"\n")
+
+    def read_until_text(self, marker: str, *, deadline_s: float) -> str:
+        """Accumulate decoded text until ``marker`` appears or the deadline passes."""
+        end = time.monotonic() + deadline_s
+        buf = b""
+        while time.monotonic() < end:
+            chunk = self.read(256)
+            if chunk:
+                buf += chunk
+                if marker.encode("ascii") in buf:
+                    break
+            else:
+                time.sleep(0.01)
+        return buf.decode("ascii", errors="replace")

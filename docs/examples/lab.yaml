@@ -1,0 +1,23 @@
+# Optional per-project lab config — place at <design>/models/lab.yaml
+# Overrides the global instruments.yaml role bindings and supplies capture
+# defaults. A project may also declare extra local instruments here.
+
+version: 1
+
+# Rebind roles for this design (omit to inherit the global bindings).
+roles:
+  scope: scope_main
+  dmm: dmm_bench
+  awg: tars_disc
+
+# Capture defaults consumed by `benchgate lab characterize` / capture_and_fit.
+capture:
+  scope_channel: 1
+  scope_auto_setup: false
+  trigger_level_v: 1.0
+  awg_channel: pg13     # TARS GPIO pin driven as the step source
+  idle_high: false      # idle low, then rising edge to 3.3 V
+  rising: true
+  edge_settle_s: 0.05
+  dmm_readings: 5       # steady-state DMM samples taken during the session
+  dmm_settle_s: 0.2

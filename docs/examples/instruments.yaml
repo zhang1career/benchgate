@@ -1,0 +1,43 @@
+# Global instrument registry — copy to ~/.benchgate/config/instruments.yaml
+# (or set BENCHGATE_HOME to relocate the config root).
+#
+# Precedence for role bindings (highest wins):
+#   CLI/Agent --scope/--dmm/--awg  >  <design>/models/lab.yaml  >  this file
+#
+# Address overrides (machine-specific, orthogonal to role bindings):
+#   BENCHGATE_INSTRUMENT_<NAME>_ADDRESS
+#   BENCHGATE_<ROLE>_ADDRESS
+
+version: 1
+
+defaults:
+  # null -> pyvisa.ResourceManager() (NI-VISA on macOS).
+  # DS1104Z USB validated with system backend; @py is unreliable for this scope.
+  visa_backend: null
+
+instruments:
+  scope_main:
+    driver: rigol_ds1104z
+    transport: visa
+    address: "USB0::6833::1230::DS1ZC244706177::0::INSTR"
+    options:
+      timeout_ms: 10000
+
+  dmm_bench:
+    driver: uni_t_ut61e
+    transport: serial
+    address: "/dev/cu.PL2303G-USBtoUART14220"
+
+  tars_disc:
+    driver: tars_shell
+    transport: serial
+    # cu.* for dial-out; screen often uses tty.* — only one client at a time
+    address: "/dev/cu.usbmodem346D345933331"
+    options:
+      baud: 115200
+      assert_dtr: true
+
+roles:
+  scope: scope_main
+  dmm: dmm_bench
+  awg: null              # set to tars_disc when using GPIO step stimulus

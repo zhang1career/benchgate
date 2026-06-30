@@ -1,0 +1,23 @@
+# Per-project lab config for benchgate — <design>/models/lab.yaml
+# Merged after ~/.benchgate/config/instruments.yaml; CLI --scope/--dmm/--awg wins.
+# Copy or adapt for other KiCad projects under design/<name>/models/.
+
+version: 1
+
+# Rebind roles for this board. Global config leaves awg null; enable TARS step here.
+roles:
+  scope: scope_main
+  dmm: dmm_bench
+  awg: tars_disc
+
+# Defaults for `benchgate lab characterize` / LabSession.capture_step_response.
+capture:
+  scope_channel: 1
+  scope_auto_setup: false
+  trigger_level_v: 1.0
+  awg_channel: pg13     # TARS GPIO pin as digital step source (3.3 V logic)
+  idle_high: false      # idle low, rising edge triggers scope
+  rising: true
+  edge_settle_s: 0.05
+  dmm_readings: 5       # steady-state UT61E samples in the same session
+  dmm_settle_s: 0.2

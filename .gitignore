@@ -1,0 +1,17 @@
+.benchgate/
+# KiCad project trees are local; track only per-project lab config scaffold.
+design/**
+!design/**/
+!design/**/models/
+!design/**/models/lab.yaml
+models/subckt/
+models/captured/
+ref/
+reports/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.raw
+Project Outputs/
