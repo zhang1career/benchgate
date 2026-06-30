@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "benchgate"
 version = "0.1.0"
-description = "KiCad 10 lab modeling, manifest audit, and background ngspice"
+description = "Close the loop from bench measurements to KiCad SPICE: lab capture, subckt modeling, batch ngspice, and quality gates."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
