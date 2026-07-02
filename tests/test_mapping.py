@@ -49,7 +49,7 @@ def test_manifest_global_subckt_paths(tmp_path: Path):
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_text(
         """
-version: 1
+version: 2
 entries:
 - kicad_key: Driver:UCC27211::UCC27211
   spice_kind: subckt

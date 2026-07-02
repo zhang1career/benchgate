@@ -86,6 +86,8 @@ def cmd_gate_report(args: argparse.Namespace) -> int:
     params: dict = {"design_dir": str(p.design), "manifest_path": str(p.manifest), "output_path": str(out)}
     if args.sim_raw:
         params["sim_raw_path"] = str(resolve_project_path(p.design, args.sim_raw, p.reports / "sim" / "sim_waveform.csv"))
+    if args.operating_point:
+        params["operating_point"] = json.loads(args.operating_point)
     result = dispatch("gate_report", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -225,6 +227,36 @@ def cmd_lab_query_waveform(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_model_build(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "kicad_key": args.kicad_key,
+        "provider": args.provider,
+        "source_file": args.source_file,
+        "sim_name": args.sim_name,
+    }
+    if args.reference:
+        params["reference"] = args.reference
+    if args.pins:
+        params["pins"] = args.pins
+    if args.notes:
+        params["notes"] = args.notes
+    if args.valid_range:
+        params["valid_range"] = json.loads(args.valid_range)
+    result = dispatch("model_build", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_model_status(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.manifest:
+        params["manifest_path"] = args.manifest
+    result = dispatch("model_status", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_agent_tools(_: argparse.Namespace) -> int:
     print(json.dumps(list_tools(), indent=2, ensure_ascii=False))
     return 0
@@ -287,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     gr.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     gr.add_argument("--out", default=None, help="Output JSON path (default: <design>/reports/gate_report.json)")
     gr.add_argument("--sim-raw", default=None)
+    gr.add_argument(
+        "--operating-point",
+        dest="operating_point",
+        default=None,
+        help='JSON of actual operating point for valid_range checks, e.g. \'{"vsupply_v":5.0,"temp_c":25}\'',
+    )
     gr.set_defaults(func=cmd_gate_report)
 
     p_lab = sub.add_parser("lab", help="Instrument control: capture, read, query")
@@ -355,6 +393,29 @@ def main(argv: list[str] | None = None) -> int:
     lqw.add_argument("--t-end", dest="t_end", type=float, default=None)
     lqw.add_argument("--out", default=None, help="Export to CSV")
     lqw.set_defaults(func=cmd_lab_query_waveform)
+
+    p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
+    model_sub = p_model.add_subparsers(dest="model_cmd", required=True)
+    mb = model_sub.add_parser("build", help="Build an ngspice subckt from a .net/.cir and register it")
+    mb.add_argument("--design", default="design", help="KiCad project directory")
+    mb.add_argument("--kicad-key", dest="kicad_key", required=True)
+    mb.add_argument("--reference", default=None)
+    mb.add_argument("--provider", default="ltspice", choices=["ltspice"])
+    mb.add_argument("--from", dest="source_file", required=True, help="LTspice-exported .net/.cir netlist")
+    mb.add_argument("--sim-name", dest="sim_name", required=True, help="Subckt name to emit")
+    mb.add_argument("--pins", default=None, help="External pins, space-separated (required to wrap a flat netlist)")
+    mb.add_argument(
+        "--valid-range",
+        dest="valid_range",
+        default=None,
+        help='JSON of valid operating ranges, e.g. \'{"vsupply_v":[4.5,5.5],"temp_c":[-10,85]}\'',
+    )
+    mb.add_argument("--notes", default=None)
+    mb.set_defaults(func=cmd_model_build)
+    mstat = model_sub.add_parser("status", help="Per-component model source / valid_range")
+    mstat.add_argument("--design", default="design", help="KiCad project directory")
+    mstat.add_argument("--manifest", default=None, help="Override manifest path")
+    mstat.set_defaults(func=cmd_model_status)
 
     p_agent = sub.add_parser("agent", help="Agent tool registry")
     agent_sub = p_agent.add_subparsers(dest="agent_cmd", required=True)

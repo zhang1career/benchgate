@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from numbers import Real
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,8 @@ class GateEntry:
     has_sim: bool
     rmse: float | None = None
     notes: str = ""
+    source: str | None = None
+    range_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -66,6 +69,33 @@ def load_bench_waveform(
         return None
 
 
+def check_valid_range(
+    valid_range: dict,
+    operating_point: dict | None,
+) -> list[str]:
+    """Warn when the operating point falls outside a model's declared valid_range.
+
+    Each ``valid_range`` dimension is a closed interval ``[min, max]`` (use
+    ``null``/``None`` or ``.inf`` for an open bound). A dimension with no
+    operating-point value yields an "unverifiable" warning (never silent).
+    """
+    warnings: list[str] = []
+    op = operating_point or {}
+    for dim, bounds in valid_range.items():
+        if not (isinstance(bounds, (list, tuple)) and len(bounds) == 2):
+            continue
+        lo, hi = bounds
+        val = op.get(dim)
+        if not isinstance(val, Real):
+            warnings.append(f"{dim}: cannot verify valid_range (no operating-point value)")
+            continue
+        if isinstance(lo, Real) and val < lo:
+            warnings.append(f"{dim}={val:g} below valid_range min {lo:g}")
+        if isinstance(hi, Real) and val > hi:
+            warnings.append(f"{dim}={val:g} above valid_range max {hi:g}")
+    return warnings
+
+
 def _waveform_from_arrays(time_s: np.ndarray, voltage_v: np.ndarray) -> Waveform:
     return Waveform(
         time_s=np.asarray(time_s, dtype=float),
@@ -80,6 +110,7 @@ def evaluate_entry(
     *,
     captured_dir: Path,
     sim_waveform: Waveform | None,
+    operating_point: dict | None = None,
 ) -> GateEntry:
     ref = entry.reference or entry.kicad_key
     bench_wf = load_bench_waveform(entry.measured, captured_dir=captured_dir) if entry.measured else None
@@ -93,6 +124,10 @@ def evaluate_entry(
     elif sim_waveform:
         notes = "sim only"
 
+    range_warnings: list[str] = []
+    if entry.provenance and entry.provenance.valid_range:
+        range_warnings = check_valid_range(entry.provenance.valid_range, operating_point)
+
     return GateEntry(
         reference=ref,
         kicad_key=entry.kicad_key,
@@ -100,6 +135,8 @@ def evaluate_entry(
         has_sim=sim_waveform is not None,
         rmse=rmse,
         notes=notes,
+        source=entry.provenance.source.value if entry.provenance else None,
+        range_warnings=range_warnings,
     )
 
 
@@ -108,6 +145,7 @@ def build_gate_report(
     *,
     captured_dir: Path,
     sim_raw_path: Path | None = None,
+    operating_point: dict | None = None,
 ) -> GateReport:
     sim_waveform: Waveform | None = None
     if sim_raw_path and sim_raw_path.exists():
@@ -120,12 +158,18 @@ def build_gate_report(
         if not item.measured and item.spice_kind.value == "passive":
             continue
         entries.append(
-            evaluate_entry(item, captured_dir=captured_dir, sim_waveform=sim_waveform)
+            evaluate_entry(
+                item,
+                captured_dir=captured_dir,
+                sim_waveform=sim_waveform,
+                operating_point=operating_point,
+            )
         )
 
     with_bench = sum(1 for e in entries if e.has_bench)
     with_sim = sum(1 for e in entries if e.has_sim)
     compared = sum(1 for e in entries if e.rmse is not None)
+    range_warnings = sum(1 for e in entries if e.range_warnings)
 
     return GateReport(
         generated_at=datetime.now(timezone.utc).isoformat(),
@@ -135,6 +179,7 @@ def build_gate_report(
             "with_bench": with_bench,
             "with_sim": with_sim,
             "compared": compared,
+            "range_warnings": range_warnings,
         },
     )
 
@@ -145,12 +190,14 @@ def write_gate_report(
     *,
     captured_dir: Path,
     sim_raw_path: Path | None = None,
+    operating_point: dict | None = None,
 ) -> GateReport:
     manifest = load_manifest(manifest_path)
     report = build_gate_report(
         manifest,
         captured_dir=captured_dir,
         sim_raw_path=sim_raw_path,
+        operating_point=operating_point,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")

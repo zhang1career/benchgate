@@ -27,6 +27,39 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "model_build": {
+        "description": (
+            "Build an ngspice subckt from a local non-bench source (e.g. an "
+            "LTspice-exported .net/.cir netlist) and register it in the manifest "
+            "with provenance. Global engine stays ngspice; this only supplies a model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
+                "kicad_key": {"type": "string"},
+                "reference": {"type": "string"},
+                "provider": {"type": "string", "enum": ["ltspice"], "description": "Model source (default: ltspice)"},
+                "source_file": {"type": "string", "description": "Path to .net/.cir netlist"},
+                "sim_name": {"type": "string", "description": "Subckt name to emit"},
+                "pins": {"type": "string", "description": "External pins (space-separated); required to wrap a flat netlist"},
+                "valid_range": {"type": "object", "description": "Operating-range assumptions (ports/freq/temp/bias)"},
+                "notes": {"type": "string"},
+            },
+            "required": ["design_dir", "kicad_key", "source_file", "sim_name"],
+        },
+    },
+    "model_status": {
+        "description": "Report per-component model source/provenance and valid_range from the manifest",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "lab_capture": {
         "description": "Step-response capture (scope + optional DMM/AWG) → fit → subckt + manifest + session",
         "parameters": {
@@ -172,6 +205,10 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_path": {"type": "string"},
                 "sim_raw_path": {"type": "string"},
+                "operating_point": {
+                    "type": "object",
+                    "description": "Actual operating point (e.g. {vsupply_v, temp_c, freq_hz}) checked against each model's valid_range",
+                },
             },
             "required": ["design_dir"],
         },

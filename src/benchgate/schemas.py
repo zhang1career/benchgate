@@ -9,11 +9,23 @@ from typing import Any
 
 
 class SpiceModelKind(str, Enum):
+    """How the model is represented in the ngspice netlist."""
+
     PASSIVE = "passive"
     SUBCKT = "subckt"
     TABLE = "table"
     BUILTIN = "builtin"
     UNMAPPED = "unmapped"
+
+
+class ModelSource(str, Enum):
+    """Where a subckt model came from (orthogonal to SpiceModelKind)."""
+
+    BENCH = "bench"          # PyVISA bench measurement + fit
+    LTSPICE = "ltspice"      # locally simulated in LTspice / .asc, exported
+    DATASHEET = "datasheet"  # fitted from datasheet curves
+    VENDOR = "vendor"        # vendor .lib referenced as-is (may be unverified)
+    MANUAL = "manual"        # hand-written / manually bound
 
 
 @dataclass
@@ -27,6 +39,34 @@ class MeasuredParams:
 
 
 @dataclass
+class ModelProvenance:
+    """Provenance + validity contract for a subckt model artifact.
+
+    The global↔local simulation boundary is the subckt: pins + valid_range +
+    this provenance. There is no runtime co-simulation coupling.
+    """
+
+    source: ModelSource
+    generated_at: str = ""
+    tool: str | None = None
+    source_files: list[str] = field(default_factory=list)
+    checksum: str | None = None
+    valid_range: dict[str, Any] = field(default_factory=dict)
+    notes: str | None = None
+    measured: MeasuredParams | None = None  # bench detail when source == BENCH
+
+
+@dataclass
+class ModelArtifact:
+    """Output of a ModelProvider: an ngspice-ready subckt + its provenance."""
+
+    lib_path: Path
+    sim_name: str
+    sim_pins: str | None
+    provenance: ModelProvenance
+
+
+@dataclass
 class ComponentMapping:
     """KiCad symbol key → ngspice / Sim.* binding."""
 
@@ -36,8 +76,13 @@ class ComponentMapping:
     sim_library: Path | None = None
     sim_name: str | None = None
     sim_pins: str | None = None
-    measured: MeasuredParams | None = None
+    provenance: ModelProvenance | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def measured(self) -> MeasuredParams | None:
+        """Bench measurement detail, if this model came from the bench."""
+        return self.provenance.measured if self.provenance else None
 
     @property
     def is_ready(self) -> bool:
@@ -56,9 +101,12 @@ class ComponentMapping:
         return "pending"
 
 
+MANIFEST_VERSION = 2
+
+
 @dataclass
 class MappingManifest:
-    version: int = 1
+    version: int = MANIFEST_VERSION
     entries: list[ComponentMapping] = field(default_factory=list)
 
     def find(self, kicad_key: str) -> ComponentMapping | None:
