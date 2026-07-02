@@ -49,6 +49,17 @@ def _parse_iso(value: str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _resolve_provenance_dict(args: dict[str, Any], key: str, existing: dict | None) -> dict:
+    """Merge agent/CLI dict fields; ``None`` or absent → keep existing (or {})."""
+    fallback = existing if isinstance(existing, dict) else {}
+    if key not in args:
+        return fallback
+    val = args[key]
+    if val is None:
+        return fallback
+    return val
+
+
 def dispatch(name: str, args: dict[str, Any]) -> Any:
     if name not in TOOLS:
         raise KeyError(f"Unknown tool: {name}")
@@ -82,19 +93,23 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
 
         source_file = resolve_project_path(p.design, args["source_file"], p.design)
         pins = args["pins"].split() if args.get("pins") else None
-        provider = LtspiceModelProvider(
-            net_path=source_file,
-            sim_name=args["sim_name"],
-            pins=pins,
-            valid_range=args.get("valid_range") or {},
-            notes=args.get("notes"),
-        )
         manifest = (
             load_manifest(p.manifest, global_models_dir=p.global_models)
             if p.manifest.exists()
             else MappingManifest()
         )
         entry = manifest.find(args["kicad_key"]) or ComponentMapping(kicad_key=args["kicad_key"])
+        existing = entry.provenance
+        valid_range = _resolve_provenance_dict(args, "valid_range", existing.valid_range if existing else None)
+        metrics = _resolve_provenance_dict(args, "metrics", existing.metrics if existing else None)
+        provider = LtspiceModelProvider(
+            net_path=source_file,
+            sim_name=args["sim_name"],
+            pins=pins,
+            valid_range=valid_range,
+            metrics=metrics,
+            notes=args.get("notes"),
+        )
         if args.get("reference"):
             entry.reference = args["reference"]
         artifact = provider.build(entry, workdir=p.subckt)
@@ -109,6 +124,21 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             "sim_pins": artifact.sim_pins,
             "warnings": artifact.provenance.notes,
         }
+
+    if name == "spec_set":
+        p = _paths_for_design(args["design_dir"], args)
+        manifest = (
+            load_manifest(p.manifest, global_models_dir=p.global_models)
+            if p.manifest.exists()
+            else MappingManifest()
+        )
+        entry = manifest.find(args["kicad_key"]) or ComponentMapping(kicad_key=args["kicad_key"])
+        if args.get("reference"):
+            entry.reference = args["reference"]
+        entry.spec = args["spec"]
+        manifest.upsert(entry)
+        save_manifest(manifest, p.manifest, global_models_dir=p.global_models)
+        return {"kicad_key": entry.kicad_key, "spec": entry.spec}
 
     if name == "model_status":
         p = _paths_for_design(args.get("design_dir", "design"), args)
@@ -126,6 +156,8 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
                     "source": e.provenance.source.value if e.provenance else None,
                     "sim_name": e.sim_name,
                     "valid_range": e.provenance.valid_range if e.provenance else {},
+                    "metrics": e.provenance.metrics if e.provenance else {},
+                    "spec": e.spec or {},
                 }
                 for e in manifest.entries
             ]
@@ -168,6 +200,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             source=ModelSource.BENCH,
             generated_at=measured.captured_at,
             tool="benchgate lab fit",
+            metrics=dict(measured.params),
             measured=measured,
         )
         save_manifest(manifest, p.manifest, global_models_dir=p.global_models)

@@ -6,7 +6,7 @@
 
 ---
 
-> **实现状态（v0.2）**：M0/M1/M2/M3/M4 全部完成，71 测试通过。默认输入 `.net`/`.cir`；`.asc` 直采为可选进阶（需 LTspice+Wine）。
+> **实现状态（v0.3）**：M0–M7 全部完成，74 测试通过。默认输入 `.net`/`.cir`；`.asc` 直采为可选进阶（需 LTspice+Wine）。自顶向下 spec/metrics 闭环已落地（§10）。
 
 ## 0. 结论摘要（TL;DR）
 
@@ -248,8 +248,95 @@ M0 与 M1 可并行；M0 用真实用户 `.asc` 复跑以定盘方言差距。
 
 ## 9. 待确认（评审后进入 M0/M1）
 
-- [ ] 确认「模型交换、非运行时耦合」为最终方向（§1）。
-- [ ] 确认边界契约 = subckt + valid_range + provenance（§3）。
-- [ ] 确认 `measured` 向后兼容迁移策略（§4.1）。
-- [ ] 确认 `.asc` 仅作 provider 输入、不作全局源（§5）。
-- [ ] 确认分阶段顺序（§6）。
+- [x] 确认「模型交换、非运行时耦合」为最终方向（§1）。
+- [x] 确认边界契约 = subckt + valid_range + provenance（§3）。
+- [x] 确认 `measured` 迁移策略：直接合并、无向后兼容（§4.1）。
+- [x] 确认 `.asc` 仅作 provider 输入、不作全局源（§5）。
+- [x] 确认分阶段顺序（§6）。
+
+---
+
+## 10. 扩展：自顶向下 spec / metrics 闭环（v0.3，待评审）
+
+### 10.1 动机
+
+M1–M4 打通的是**自底向上**：局部仿真 → 模型工件 → 全局 ngspice 引用。用户还需要**自顶向下**：
+
+1. 全局环节给局部电路**限定性能指标**（spec / budget）；
+2. 依据 spec 对局部电路仿真（如 LTspice）；
+3. 仿真产出**实际性能指标**（metrics），回填到全局数据并与 spec 比对。
+
+### 10.2 三个正交概念（务必区分，避免语义混淆）
+
+| 概念 | 方向 | 落点 | 语义 | 违反后果 |
+|------|------|------|------|----------|
+| `spec` | 自顶向下（全局下发） | `ComponentMapping.spec` | 该块**必须达到**的性能目标 | 未达 → 设计**不合格**（fail） |
+| `metrics` | 自底向上（局部产出） | `ModelProvenance.metrics` | 该块**实际达到**的性能 | —— |
+| `valid_range` | 侧向（模型自述） | `ModelProvenance.valid_range` | 模型在何条件下**可信**（已实现 §3.2） | 越界 → 模型**不可信**（warn） |
+
+关键：`spec` 不是 `valid_range`。前者是「要求」，后者是「适用域」。gate 对二者分别产出 **fail**（硬）与 **warn**（软）。
+
+### 10.3 数据结构（扁平区间，与 valid_range 同形）
+
+```python
+# ComponentMapping 新增
+spec: dict[str, list] | None = None        # {metric: [min, max]}，自顶向下的性能预算
+
+# ModelProvenance 新增
+metrics: dict[str, float] = field(default_factory=dict)  # 实际达成指标（泛化 bench 的 measured.params）
+```
+
+- `spec` 用与 `valid_range` 相同的扁平闭区间 `{name: [min, max]}`（开区间 `null`/`.inf`），复用同一套校验逻辑。
+- `metrics` 是**规格比对的规范面**：无论来源（bench/ltspice/datasheet）都往这里写。bench 流程把关键 `measured.params` 同步进 `metrics`；`measured` 仍保留原始明细。
+
+### 10.4 gate：spec vs metrics 门禁
+
+`gate/report.py` 新增（与 `check_valid_range` 同款区间逻辑）：
+
+```python
+def check_spec(spec: dict, metrics: dict) -> list[str]:
+    """返回不达标项；spec 维度在 metrics 中缺失 → 记「未表征，无法判定」。"""
+```
+
+`GateEntry` 增加 `spec_status: "pass" | "fail" | "n/a"` 与 `spec_failures: list[str]`；`summary` 增加 `spec_failures` 计数。**spec 比对自包含**（spec 与 metrics 都在 manifest 里），不需要 `operating_point`。
+
+### 10.5 metrics 的来源
+
+1. `--metrics '{"vout_ripple_mv": 12, "eff_pct": 92}'` 直传（最简，先支持）。
+2. `--from-meas block.log`：解析 LTspice/ngspice `.MEAS` 结果日志为 `{name: value}`（可选，复用 spicelib `LTSpiceLogReader` 思路）。
+
+### 10.6 CLI / Agent 工具面（新增）
+
+| CLI | agent 工具 | 说明 |
+|-----|-----------|------|
+| `benchgate spec set --kicad-key K --spec '{...}'` | `spec_set` | 下发/更新某块的性能预算 |
+| `benchgate model build … --metrics '{...}'` / `--from-meas x.log` | `model_build`（扩展参数） | 回填实际 metrics |
+| `benchgate gate report`（无新参数） | `gate_report` | 报告体现 spec pass/fail + summary.spec_failures |
+
+### 10.7 闭环示意
+
+```mermaid
+flowchart LR
+  SPEC["spec set U3<br/>{ripple≤15mV, eff≥90%}"] -->|下发| MAN[(manifest.spec)]
+  MAN -->|读 spec 指导| LT[LTspice 局部仿真]
+  LT -->|.net + .log| MB["model build --metrics"]
+  MB -->|subckt + provenance.metrics| MAN2[(manifest.provenance.metrics)]
+  MAN2 --> GATE{gate: check_spec}
+  GATE -->|metrics 满足 spec| PASS[pass]
+  GATE -->|越界| FAIL[fail + spec_failures]
+```
+
+### 10.8 里程碑（续 §6）
+
+| 里程碑 | 内容 | 验收 |
+|--------|------|------|
+| **M5 schema** ✅ | `ComponentMapping.spec` + `ModelProvenance.metrics` + manifest 往返 | **完成**：序列化一致（spec 在 entry、metrics 在 provenance）；bench 流程同步 `measured.params`→`metrics` |
+| **M6 gate** ✅ | `check_spec` + `GateEntry.spec_status/spec_failures` + `summary.spec_failures` | **完成**：pass/fail/未表征三态单测 |
+| **M7 CLI/agent** ✅ | `spec set` + `model build --metrics` + `spec_set`/`model_build` 工具 | **完成**：CLI 端到端 下发→回填→gate fail（eff 88<90）；`--from-meas` 日志解析延后 |
+
+### 10.9 待确认（进入 M5 前）
+
+- [x] `spec` 与 `metrics` 采用扁平区间 `{name:[min,max]}` / 标量 dict（§10.3）。
+- [x] `spec` 挂在 `ComponentMapping`、`metrics` 挂在 `ModelProvenance`（§10.2）。
+- [x] gate 中 spec 不达标为 **fail（硬）**，valid_range 越界为 **warn（软）**（§10.4）。
+- [x] metrics 先支持 `--metrics` 直传，`--from-meas` 日志解析作为可选后续（§10.5）。

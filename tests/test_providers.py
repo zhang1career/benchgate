@@ -41,7 +41,9 @@ def test_normalize_strips_analysis_and_micro():
 
 
 def test_wrap_flat_netlist_drops_sources():
-    text, warnings = netlist_to_subckt(FLAT_NET, name="RCLP", pins=["in", "out"])
+    text, warnings, sim_name, pin_names = netlist_to_subckt(FLAT_NET, name="RCLP", pins=["in", "out"])
+    assert sim_name == "RCLP"
+    assert pin_names == ["in", "out"]
     assert text.startswith(".subckt RCLP in out")
     assert "R1 in out 1k" in text
     assert "C1 out 0 100n" in text
@@ -58,10 +60,81 @@ def test_flat_netlist_without_pins_raises():
 
 
 def test_extract_existing_subckt():
-    text, warnings = netlist_to_subckt(SUBCKT_NET, name="RCLP", pins=None)
+    text, warnings, sim_name, pin_names = netlist_to_subckt(SUBCKT_NET, name="RCLP", pins=None)
+    assert sim_name == "RCLP"
+    assert pin_names == ["in", "out"]
     assert ".subckt RCLP in out" in text
     assert ".ends RCLP" in text
     assert ".tran" not in text
+
+
+def test_extracted_subckt_pins_authoritative_over_cli_pins(tmp_path):
+    """Netlist header pins win over --pins in extract mode (Bugbot: sim_pins mismatch)."""
+    net = tmp_path / "block.net"
+    net.write_text(SUBCKT_NET, encoding="utf-8")
+    art = LtspiceModelProvider(net_path=net, sim_name="RCLP", pins=["a", "b"]).build(
+        entry=None, workdir=tmp_path / "subckt"
+    )
+    assert art.sim_pins == "in out"
+    assert "pins" in (art.provenance.notes or "")
+
+
+def test_extracted_subckt_pins_registered_without_cli_pins(tmp_path):
+    net = tmp_path / "block.net"
+    net.write_text(SUBCKT_NET, encoding="utf-8")
+    art = LtspiceModelProvider(net_path=net, sim_name="RCLP").build(
+        entry=None, workdir=tmp_path / "subckt"
+    )
+    assert art.sim_pins == "in out"
+
+
+def test_model_build_null_metrics_preserves_existing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    design = tmp_path / "design"
+    design.mkdir()
+    monkeypatch.setenv("BENCHGATE_HOME", str(home))
+    (design / "block.net").write_text(SUBCKT_NET, encoding="utf-8")
+    key = "Sim:X::RCLP"
+    base = {"design_dir": str(design), "kicad_key": key, "source_file": "block.net", "sim_name": "RCLP"}
+    dispatch("model_build", {**base, "metrics": {"eff_pct": 88.0}})
+    dispatch("model_build", {**base, "metrics": None})
+
+    entry = load_manifest(design / "models" / "manifest.yaml", global_models_dir=home / "models").find(key)
+    assert entry.provenance.metrics == {"eff_pct": 88.0}
+    assert entry.sim_pins == "in out"
+
+
+def test_extracted_subckt_name_authoritative_over_requested(tmp_path):
+    """Netlist .subckt name wins over --sim-name (Bugbot: manifest/ngspice mismatch)."""
+    net = tmp_path / "block.net"
+    net.write_text(SUBCKT_NET, encoding="utf-8")
+    provider = LtspiceModelProvider(net_path=net, sim_name="BUCK")
+    art = provider.build(entry=None, workdir=tmp_path / "subckt")
+    assert art.sim_name == "RCLP"
+    assert art.lib_path.name == "RCLP.lib"
+    assert ".subckt RCLP" in art.lib_path.read_text()
+
+
+def test_model_build_rebuild_preserves_metrics(tmp_path, monkeypatch):
+    """Re-running model build without --metrics must not wipe prior gate data."""
+    home = tmp_path / "home"
+    design = tmp_path / "design"
+    design.mkdir()
+    monkeypatch.setenv("BENCHGATE_HOME", str(home))
+    (design / "block.net").write_text(SUBCKT_NET, encoding="utf-8")
+    key = "Sim:X::RCLP"
+    base = {
+        "design_dir": str(design),
+        "kicad_key": key,
+        "source_file": "block.net",
+        "sim_name": "RCLP",
+    }
+    dispatch("model_build", {**base, "metrics": {"eff_pct": 88.0}, "valid_range": {"temp_c": [-10, 85]}})
+    dispatch("model_build", base)
+
+    entry = load_manifest(design / "models" / "manifest.yaml", global_models_dir=home / "models").find(key)
+    assert entry.provenance.metrics == {"eff_pct": 88.0}
+    assert entry.provenance.valid_range == {"temp_c": [-10, 85]}
 
 
 def test_provider_build_writes_lib_and_provenance(tmp_path):
@@ -95,6 +168,7 @@ def test_model_build_dispatch_registers_manifest(tmp_path, monkeypatch):
         },
     )
     assert result["source"] == "ltspice"
+    assert result["sim_pins"] == "in out"
 
     manifest = load_manifest(design / "models" / "manifest.yaml", global_models_dir=home / "models")
     entry = manifest.find("Simulation_SPICE:X::RCLP")
@@ -106,3 +180,32 @@ def test_model_build_dispatch_registers_manifest(tmp_path, monkeypatch):
 
     status = dispatch("model_status", {"design_dir": str(design)})
     assert status["entries"][0]["source"] == "ltspice"
+
+
+def test_spec_set_and_metrics_close_loop(tmp_path, monkeypatch):
+    """Top-down: spec set → model build --metrics → gate fail/pass."""
+    from benchgate.gate.report import build_gate_report
+
+    home = tmp_path / "home"
+    design = tmp_path / "design"
+    design.mkdir()
+    monkeypatch.setenv("BENCHGATE_HOME", str(home))
+    (design / "block.net").write_text(SUBCKT_NET, encoding="utf-8")
+    key = "Sim:X::RCLP"
+
+    # 1. downward: set the performance budget
+    dispatch("spec_set", {"design_dir": str(design), "kicad_key": key, "reference": "X1",
+                          "spec": {"eff_pct": [90, 100]}})
+    # 2/3. upward: local sim result → metrics (failing: 80 < 90)
+    dispatch("model_build", {"design_dir": str(design), "kicad_key": key,
+                             "source_file": "block.net", "sim_name": "RCLP",
+                             "metrics": {"eff_pct": 80.0}})
+
+    manifest = load_manifest(design / "models" / "manifest.yaml", global_models_dir=home / "models")
+    entry = manifest.find(key)
+    assert entry.spec == {"eff_pct": [90, 100]}
+    assert entry.provenance.metrics == {"eff_pct": 80.0}
+
+    report = build_gate_report(manifest, captured_dir=design / "models" / "captured")
+    assert report.entries[0].spec_status == "fail"
+    assert report.summary["spec_failures"] == 1

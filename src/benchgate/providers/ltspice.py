@@ -91,8 +91,8 @@ def _is_element(line: str) -> bool:
     return bool(s) and not s.startswith(("*", ".")) and s[0].isalpha()
 
 
-def _extract_subckt(lines: list[str]) -> tuple[str, list[str]] | None:
-    """If a ``.subckt`` block exists, return (name, block_lines) for the first one."""
+def _extract_subckt(lines: list[str]) -> tuple[str, list[str], list[str]] | None:
+    """If a ``.subckt`` block exists, return (name, pin_names, block_lines)."""
     start = None
     header = ""
     for i, line in enumerate(lines):
@@ -103,13 +103,15 @@ def _extract_subckt(lines: list[str]) -> tuple[str, list[str]] | None:
             break
     if start is None:
         return None
-    name = header.split()[1] if len(header.split()) > 1 else "SUBCKT"
+    parts = header.split()
+    name = parts[1] if len(parts) > 1 else "SUBCKT"
+    pins = parts[2:] if len(parts) > 2 else []
     block = [lines[start]]
     for line in lines[start + 1 :]:
         block.append(line)
         if line.strip().lower().startswith(".ends"):
             break
-    return name, block
+    return name, pins, block
 
 
 def netlist_to_subckt(
@@ -117,7 +119,7 @@ def netlist_to_subckt(
     *,
     name: str,
     pins: list[str] | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], str, list[str]]:
     """Convert an LTspice netlist into an ngspice ``.subckt`` block.
 
     Two modes:
@@ -128,17 +130,22 @@ def netlist_to_subckt(
          <pins> … .ends``, dropping independent V/I stimulus and analysis
          directives (each drop is reported in warnings). ``pins`` is required here.
 
-    Returns (subckt_text, warnings).
+    Returns (subckt_text, warnings, sim_name, pin_names). ``sim_name`` and
+    ``pin_names`` are those embedded in the emitted ``.subckt``.
     """
     lines, warnings = normalize_ltspice_netlist(text)
 
     extracted = _extract_subckt(lines)
     if extracted is not None:
-        found_name, block = extracted
+        found_name, found_pins, block = extracted
         if found_name.upper() != name.upper():
             warnings.append(f"using subckt name {found_name!r} from netlist (requested {name!r})")
+        if pins and pins != found_pins:
+            warnings.append(
+                f"using subckt pins {found_pins!r} from netlist (requested {pins!r})"
+            )
         body = "\n".join(line for line in block if line.strip())
-        return body + "\n", warnings
+        return body + "\n", warnings, found_name, found_pins
 
     if not pins:
         raise ValueError(
@@ -172,7 +179,7 @@ def netlist_to_subckt(
     parts.extend(models)
     parts.extend(body)
     parts.append(f".ends {name}")
-    return "\n".join(parts) + "\n", warnings
+    return "\n".join(parts) + "\n", warnings, name, list(pins)
 
 
 @dataclass
@@ -183,15 +190,18 @@ class LtspiceModelProvider:
     sim_name: str
     pins: list[str] | None = None
     valid_range: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
     notes: str | None = None
 
     source = ModelSource.LTSPICE
 
     def build(self, entry: ComponentMapping, *, workdir: Path) -> ModelArtifact:
         raw = self.net_path.read_text(encoding="utf-8", errors="replace")
-        subckt_text, warnings = netlist_to_subckt(raw, name=self.sim_name, pins=self.pins)
+        subckt_text, warnings, sim_name, pin_names = netlist_to_subckt(
+            raw, name=self.sim_name, pins=self.pins
+        )
 
-        lib_path = (workdir / f"{self.sim_name}.lib").resolve()
+        lib_path = (workdir / f"{sim_name}.lib").resolve()
         write_subckt(lib_path, subckt_text)
 
         checksum = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -202,13 +212,19 @@ class LtspiceModelProvider:
             tool="benchgate ltspice provider",
             source_files=[str(self.net_path)],
             checksum=checksum,
-            valid_range=dict(self.valid_range),
+            valid_range=dict(self.valid_range or {}),
+            metrics=dict(self.metrics or {}),
             notes="; ".join(note_parts) or None,
         )
-        pin_str = " ".join(self.pins) if self.pins else None
+        if pin_names:
+            pin_str = " ".join(pin_names)
+        elif entry and entry.sim_pins:
+            pin_str = entry.sim_pins
+        else:
+            pin_str = None
         return ModelArtifact(
             lib_path=lib_path,
-            sim_name=self.sim_name,
+            sim_name=sim_name,
             sim_pins=pin_str,
             provenance=provenance,
         )

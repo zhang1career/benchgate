@@ -243,7 +243,22 @@ def cmd_model_build(args: argparse.Namespace) -> int:
         params["notes"] = args.notes
     if args.valid_range:
         params["valid_range"] = json.loads(args.valid_range)
+    if args.metrics:
+        params["metrics"] = json.loads(args.metrics)
     result = dispatch("model_build", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_spec_set(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "kicad_key": args.kicad_key,
+        "spec": json.loads(args.spec),
+    }
+    if args.reference:
+        params["reference"] = args.reference
+    result = dispatch("spec_set", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
@@ -410,12 +425,30 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help='JSON of valid operating ranges, e.g. \'{"vsupply_v":[4.5,5.5],"temp_c":[-10,85]}\'',
     )
+    mb.add_argument(
+        "--metrics",
+        default=None,
+        help='JSON of achieved metrics, e.g. \'{"vout_ripple_mv":12,"eff_pct":92}\'',
+    )
     mb.add_argument("--notes", default=None)
     mb.set_defaults(func=cmd_model_build)
-    mstat = model_sub.add_parser("status", help="Per-component model source / valid_range")
+    mstat = model_sub.add_parser("status", help="Per-component model source / valid_range / spec / metrics")
     mstat.add_argument("--design", default="design", help="KiCad project directory")
     mstat.add_argument("--manifest", default=None, help="Override manifest path")
     mstat.set_defaults(func=cmd_model_status)
+
+    p_spec = sub.add_parser("spec", help="Top-down performance budgets (spec) per component")
+    spec_sub = p_spec.add_subparsers(dest="spec_cmd", required=True)
+    ss = spec_sub.add_parser("set", help="Set a component's required performance budget")
+    ss.add_argument("--design", default="design", help="KiCad project directory")
+    ss.add_argument("--kicad-key", dest="kicad_key", required=True)
+    ss.add_argument("--reference", default=None)
+    ss.add_argument(
+        "--spec",
+        required=True,
+        help='JSON budget {metric:[min,max]}, e.g. \'{"vout_ripple_mv":[0,15],"eff_pct":[90,100]}\'',
+    )
+    ss.set_defaults(func=cmd_spec_set)
 
     p_agent = sub.add_parser("agent", help="Agent tool registry")
     agent_sub = p_agent.add_subparsers(dest="agent_cmd", required=True)

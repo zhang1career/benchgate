@@ -27,6 +27,8 @@ class GateEntry:
     notes: str = ""
     source: str | None = None
     range_warnings: list[str] = field(default_factory=list)
+    spec_status: str = "n/a"  # pass | fail | n/a
+    spec_failures: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +71,13 @@ def load_bench_waveform(
         return None
 
 
+def _interval_bounds(dim: str, bounds: object, *, label: str) -> tuple[object, object] | str:
+    """Parse ``[min, max]`` interval bounds, or return an error message."""
+    if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+        return bounds[0], bounds[1]
+    return f"{dim}: invalid {label} bounds (expected [min, max])"
+
+
 def check_valid_range(
     valid_range: dict,
     operating_point: dict | None,
@@ -82,9 +91,11 @@ def check_valid_range(
     warnings: list[str] = []
     op = operating_point or {}
     for dim, bounds in valid_range.items():
-        if not (isinstance(bounds, (list, tuple)) and len(bounds) == 2):
+        parsed = _interval_bounds(dim, bounds, label="valid_range")
+        if isinstance(parsed, str):
+            warnings.append(parsed)
             continue
-        lo, hi = bounds
+        lo, hi = parsed
         val = op.get(dim)
         if not isinstance(val, Real):
             warnings.append(f"{dim}: cannot verify valid_range (no operating-point value)")
@@ -94,6 +105,33 @@ def check_valid_range(
         if isinstance(hi, Real) and val > hi:
             warnings.append(f"{dim}={val:g} above valid_range max {hi:g}")
     return warnings
+
+
+def check_spec(spec: dict, metrics: dict | None) -> list[str]:
+    """Return spec failures: achieved ``metrics`` vs required ``spec`` intervals.
+
+    Each ``spec`` dimension is a closed interval ``[min, max]`` (open bound via
+    ``null``/``.inf``). A spec dimension with no achieved metric is reported as
+    "not characterized" (counts as a failure — can't prove it's met).
+    Malformed bounds count as failures (never silent pass).
+    """
+    failures: list[str] = []
+    m = metrics or {}
+    for dim, bounds in spec.items():
+        parsed = _interval_bounds(dim, bounds, label="spec")
+        if isinstance(parsed, str):
+            failures.append(parsed)
+            continue
+        lo, hi = parsed
+        val = m.get(dim)
+        if not isinstance(val, Real):
+            failures.append(f"{dim}: not characterized (no metric for spec)")
+            continue
+        if isinstance(lo, Real) and val < lo:
+            failures.append(f"{dim}={val:g} below spec min {lo:g}")
+        if isinstance(hi, Real) and val > hi:
+            failures.append(f"{dim}={val:g} above spec max {hi:g}")
+    return failures
 
 
 def _waveform_from_arrays(time_s: np.ndarray, voltage_v: np.ndarray) -> Waveform:
@@ -128,6 +166,13 @@ def evaluate_entry(
     if entry.provenance and entry.provenance.valid_range:
         range_warnings = check_valid_range(entry.provenance.valid_range, operating_point)
 
+    spec_status = "n/a"
+    spec_failures: list[str] = []
+    if entry.spec:
+        metrics = entry.provenance.metrics if entry.provenance else None
+        spec_failures = check_spec(entry.spec, metrics)
+        spec_status = "fail" if spec_failures else "pass"
+
     return GateEntry(
         reference=ref,
         kicad_key=entry.kicad_key,
@@ -137,6 +182,8 @@ def evaluate_entry(
         notes=notes,
         source=entry.provenance.source.value if entry.provenance else None,
         range_warnings=range_warnings,
+        spec_status=spec_status,
+        spec_failures=spec_failures,
     )
 
 
@@ -170,6 +217,7 @@ def build_gate_report(
     with_sim = sum(1 for e in entries if e.has_sim)
     compared = sum(1 for e in entries if e.rmse is not None)
     range_warnings = sum(1 for e in entries if e.range_warnings)
+    spec_failures = sum(1 for e in entries if e.spec_status == "fail")
 
     return GateReport(
         generated_at=datetime.now(timezone.utc).isoformat(),
@@ -180,6 +228,7 @@ def build_gate_report(
             "with_sim": with_sim,
             "compared": compared,
             "range_warnings": range_warnings,
+            "spec_failures": spec_failures,
         },
     )
 

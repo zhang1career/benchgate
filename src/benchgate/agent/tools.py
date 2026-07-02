@@ -44,9 +44,26 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "sim_name": {"type": "string", "description": "Subckt name to emit"},
                 "pins": {"type": "string", "description": "External pins (space-separated); required to wrap a flat netlist"},
                 "valid_range": {"type": "object", "description": "Operating-range assumptions (ports/freq/temp/bias)"},
+                "metrics": {"type": "object", "description": "Achieved performance metrics {name: value} from the local sim"},
                 "notes": {"type": "string"},
             },
             "required": ["design_dir", "kicad_key", "source_file", "sim_name"],
+        },
+    },
+    "spec_set": {
+        "description": (
+            "Set a top-down performance budget (spec) on a component: "
+            "{metric: [min, max]}. gate_report checks achieved metrics against it (pass/fail)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "kicad_key": {"type": "string"},
+                "reference": {"type": "string"},
+                "spec": {"type": "object", "description": "{metric: [min, max]} required performance budget"},
+            },
+            "required": ["design_dir", "kicad_key", "spec"],
         },
     },
     "model_status": {

@@ -52,6 +52,7 @@ class ModelProvenance:
     source_files: list[str] = field(default_factory=list)
     checksum: str | None = None
     valid_range: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)  # achieved performance (any source)
     notes: str | None = None
     measured: MeasuredParams | None = None  # bench detail when source == BENCH
 
@@ -77,6 +78,7 @@ class ComponentMapping:
     sim_name: str | None = None
     sim_pins: str | None = None
     provenance: ModelProvenance | None = None
+    spec: dict[str, Any] | None = None  # top-down performance budget {metric: [min, max]}
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

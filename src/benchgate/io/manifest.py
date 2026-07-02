@@ -69,6 +69,8 @@ def _provenance_to_dict(pv: ModelProvenance) -> dict[str, Any]:
         d["checksum"] = pv.checksum
     if pv.valid_range:
         d["valid_range"] = pv.valid_range
+    if pv.metrics:
+        d["metrics"] = pv.metrics
     if pv.notes:
         d["notes"] = pv.notes
     if pv.measured:
@@ -83,7 +85,8 @@ def _provenance_from_dict(d: dict[str, Any]) -> ModelProvenance:
         tool=d.get("tool"),
         source_files=d.get("source_files", []),
         checksum=d.get("checksum"),
-        valid_range=d.get("valid_range", {}),
+        valid_range=d.get("valid_range") or {},
+        metrics=d.get("metrics") or {},
         notes=d.get("notes"),
         measured=_measured_from_dict(d["measured"]) if "measured" in d else None,
     )
@@ -110,6 +113,8 @@ def _mapping_to_dict(
         d["sim_name"] = m.sim_name
     if m.sim_pins:
         d["sim_pins"] = m.sim_pins
+    if m.spec:
+        d["spec"] = m.spec
     if m.provenance:
         d["provenance"] = _provenance_to_dict(m.provenance)
     return d
@@ -137,6 +142,7 @@ def _mapping_from_dict(
         sim_name=d.get("sim_name"),
         sim_pins=d.get("sim_pins"),
         provenance=provenance,
+        spec=d.get("spec"),
         metadata=d.get("metadata", {}),
     )
 
