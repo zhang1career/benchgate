@@ -50,6 +50,8 @@ class BenchgatePaths:
     state: Path
     cosim_build: Path
     tmp_root: Path
+    blocks_yaml: Path
+    blocks_dir: Path
 
 
 def resolve_project_path(design: Path, path: Path | str | None, default: Path) -> Path:
@@ -100,4 +102,6 @@ def benchgate_paths(
         state=design_state_path(resolved_home, design),
         cosim_build=resolved_home / "cosim",
         tmp_root=benchgate_tmp_root(),
+        blocks_yaml=(models / "blocks.yaml").resolve(),
+        blocks_dir=(models / "blocks").resolve(),
     )

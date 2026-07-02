@@ -228,3 +228,39 @@ class LtspiceModelProvider:
             sim_pins=pin_str,
             provenance=provenance,
         )
+
+
+_NET_SUFFIXES = {".net", ".cir"}
+_ASC_SUFFIXES = {".asc"}
+
+
+def resolve_spice_source(source: Path, *, workdir: Path) -> Path:
+    """Return a SPICE netlist path for model build (.net/.cir as-is; .asc via LTspice)."""
+    source = source.resolve()
+    suffix = source.suffix.lower()
+    if suffix in _NET_SUFFIXES:
+        return source
+    if suffix in _ASC_SUFFIXES:
+        return _asc_to_netlist(source, workdir=workdir)
+    raise ValueError(
+        f"unsupported local block source {source.name!r}; use .net, .cir, or .asc"
+    )
+
+
+def _asc_to_netlist(asc_path: Path, *, workdir: Path) -> Path:
+    """Export ``.asc`` → ``.net`` using LTspice CLI (requires LTspice/Wine on macOS)."""
+    try:
+        from spicelib.simulators.ltspice_simulator import LTspice
+    except ImportError as exc:
+        raise RuntimeError(
+            "spicelib is required for .asc sources (pip install spicelib). "
+            "Alternatively export SPICE netlist from LTspice (View → SPICE Netlist) "
+            "and reference the .net file in blocks.yaml."
+        ) from exc
+    if not LTspice.is_available():
+        raise RuntimeError(
+            "LTspice is not installed or not on PATH; cannot netlist .asc headlessly on this machine. "
+            "Export a .net from LTspice GUI and set source: blocks/your_block.net in blocks.yaml."
+        )
+    workdir.mkdir(parents=True, exist_ok=True)
+    return LTspice.create_netlist(asc_path, cwd=workdir)

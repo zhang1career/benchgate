@@ -230,13 +230,31 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "pipeline_sync": {
+        "description": (
+            "Agent automation: read models/blocks.yaml, build local subckt models "
+            "(.net/.cir/.asc), apply spec/metrics/valid_range to manifest — no manual model build steps"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "watch_once": {
-        "description": "Detect design changes and run mapping + optional sim pipeline",
+        "description": (
+            "One-shot agent pipeline: detect KiCad + blocks.yaml changes → pipeline sync "
+            "(local models/spec/metrics) → mapping sync → optional sim → gate (spec + valid_range)"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
-                "run_sim": {"type": "boolean"},
+                "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
+                "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
+                "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
             },
             "required": ["design_dir"],
         },

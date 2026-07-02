@@ -2,11 +2,11 @@
 
 > ngspice 全局引擎 + 局部他源模型（含 LTspice / `.asc`）
 > 版本：0.2（评审通过；**不保留向后兼容**）· 目标读者：项目维护者、Agent 编排设计
-> 关联：`docs/MINIMUM_SCOPE.md` §2.1（sim/gate/lab）、§8（Agent 工具最小集）
+> 关联：`docs/MINIMUM_SCOPE.md` §1.1（设计–验证闭环）、§8（Agent 工具）
 
 ---
 
-> **实现状态（v0.3）**：M0–M7 全部完成，74 测试通过。默认输入 `.net`/`.cir`；`.asc` 直采为可选进阶（需 LTspice+Wine）。自顶向下 spec/metrics 闭环已落地（§10）。
+> **实现状态（v0.3）**：M0–M7 全部完成。默认输入 `.net`/`.cir`；`.asc` 直采为可选进阶（需 LTspice+Wine）。自顶向下 spec/metrics 闭环已落地（§10）。架构总览见 [MINIMUM_SCOPE §1.1](MINIMUM_SCOPE.md#11-设计验证闭环)。
 
 ## 0. 结论摘要（TL;DR）
 
@@ -35,23 +35,28 @@ ngspice 与 LTspice 同时运行、在分区边界每步交换电压/电流。**
 这正是 benchgate 现有链路对**台架实测**在做的事（`lab/fit` → `models/subckt/*.lib` → `manifest` → `sim`）。本 RFC 只是把「模型工件的来源」从「bench 实测」泛化为「任意 provider」。
 
 ```mermaid
-flowchart LR
-  subgraph offline ["离线模型来源（一次性，可 GUI/Wine）"]
-    BENCH[bench 实测<br/>PyVISA]
-    LTS[LTspice / .asc<br/>spicelib headless]
-    DS[数据手册]
+flowchart TB
+  subgraph topdown ["自顶向下"]
+    SPEC["spec / blocks.yaml"]
   end
-  subgraph core ["benchgate 核心（headless / agent）"]
+
+  subgraph bottomup ["自底向上 · 离线表征"]
+    BENCH["lab / bench<br/>PyVISA"]
+    LTS["LTspice / .net"]
+    DS["数据手册 / vendor"]
+  end
+
+  subgraph spine ["共享脊柱"]
     PROV[ModelProvider]
-    LIB[(models/subckt/*.lib)]
-    MAN[(manifest.yaml<br/>+ provenance)]
-    NL[kicad-cli spice 网表]
+    LIB[(subckt/*.lib)]
+    MAN[(manifest<br/>+ provenance)]
     SIM[ngspice -b 全局仿真]
-    GATE[gate: 有效域 + RMSE 校验]
+    GATE["gate: spec + valid_range + RMSE"]
   end
+
+  SPEC --> GATE
   BENCH & LTS & DS --> PROV --> LIB --> MAN
-  MAN --> SIM
-  NL --> SIM --> GATE
+  MAN --> SIM --> GATE
 ```
 
 ---
@@ -256,15 +261,19 @@ M0 与 M1 可并行；M0 用真实用户 `.asc` 复跑以定盘方言差距。
 
 ---
 
-## 10. 扩展：自顶向下 spec / metrics 闭环（v0.3，待评审）
+## 10. 扩展：自顶向下 spec / metrics 闭环（v0.3，已实现）
+
+> 与 [MINIMUM_SCOPE §1.1](MINIMUM_SCOPE.md#11-设计验证闭环) · [README §闭环结构](../README.md) 同一叙事。
 
 ### 10.1 动机
 
-M1–M4 打通的是**自底向上**：局部仿真 → 模型工件 → 全局 ngspice 引用。用户还需要**自顶向下**：
+M1–M4 打通的是**自底向上**的一条腿：局部表征 → 模型工件 → 全局 ngspice。完整的设计–验证闭环还需要**自顶向下**与之汇合：
 
-1. 全局环节给局部电路**限定性能指标**（spec / budget）；
-2. 依据 spec 对局部电路仿真（如 LTspice）；
-3. 仿真产出**实际性能指标**（metrics），回填到全局数据并与 spec 比对。
+1. 系统/块级**限定性能指标**（spec / budget）；
+2. 按 spec 驱动局部设计与表征（LTspice、**实验室**等自底向上工具）；
+3. 表征产出 **metrics**，经 manifest → ngspice → **gate** 与 spec 比对。
+
+**实验室**是闭环的测量基础（Session → fit → metrics），不是与自顶向下并列的「另一条路径」；台架与 LTspice 均为自底向上的表征手段。
 
 ### 10.2 三个正交概念（务必区分，避免语义混淆）
 
@@ -300,31 +309,56 @@ def check_spec(spec: dict, metrics: dict) -> list[str]:
 
 `GateEntry` 增加 `spec_status: "pass" | "fail" | "n/a"` 与 `spec_failures: list[str]`；`summary` 增加 `spec_failures` 计数。**spec 比对自包含**（spec 与 metrics 都在 manifest 里），不需要 `operating_point`。
 
-### 10.5 metrics 的来源
+### 10.5 metrics 的来源（自底向上）
 
-1. `--metrics '{"vout_ripple_mv": 12, "eff_pct": 92}'` 直传（最简，先支持）。
-2. `--from-meas block.log`：解析 LTspice/ngspice `.MEAS` 结果日志为 `{name: value}`（可选，复用 spicelib `LTSpiceLogReader` 思路）。
+| 来源 | 入口 | 说明 |
+|------|------|------|
+| 实验室 | `lab characterize` | `measured.params` 同步进 `provenance.metrics` |
+| LTspice 等 | `model build --metrics` · `blocks.yaml` 的 `metrics` / `metrics_file` | 设计阶段无硬件 |
+| 直传 | CLI `--metrics '{...}'` | 最简手工回填 |
+| 日志解析 | `--from-meas block.log`（延后） | LTspice/ngspice `.MEAS` 日志 |
 
-### 10.6 CLI / Agent 工具面（新增）
+### 10.6 CLI / Agent 工具面
 
-| CLI | agent 工具 | 说明 |
-|-----|-----------|------|
-| `benchgate spec set --kicad-key K --spec '{...}'` | `spec_set` | 下发/更新某块的性能预算 |
-| `benchgate model build … --metrics '{...}'` / `--from-meas x.log` | `model_build`（扩展参数） | 回填实际 metrics |
-| `benchgate gate report`（无新参数） | `gate_report` | 报告体现 spec pass/fail + summary.spec_failures |
+| 层次 | CLI | agent 工具 | 说明 |
+|------|-----|-----------|------|
+| 自顶向下 | `benchgate spec set …` | `spec_set` | 下发/更新性能预算 |
+| 自顶向下 | `benchgate pipeline sync` | `pipeline_sync` | `blocks.yaml` 一键：spec + subckt + metrics |
+| 自底向上 | `benchgate model build … --metrics` | `model_build` | 单块 subckt + metrics 回填 |
+| 共享 | `benchgate gate report` | `gate_report` | spec pass/fail + valid_range + RMSE |
+| 共享 | `benchgate watch once` | `watch_once` | pipeline → mapping → sim → gate |
 
 ### 10.7 闭环示意
 
+与 MINIMUM_SCOPE §7.2 一致：**自顶向下**写 spec，**自底向上**（lab / LTspice / pipeline）写 metrics + subckt，**gate** 汇合。
+
 ```mermaid
-flowchart LR
-  SPEC["spec set U3<br/>{ripple≤15mV, eff≥90%}"] -->|下发| MAN[(manifest.spec)]
-  MAN -->|读 spec 指导| LT[LTspice 局部仿真]
-  LT -->|.net + .log| MB["model build --metrics"]
-  MB -->|subckt + provenance.metrics| MAN2[(manifest.provenance.metrics)]
-  MAN2 --> GATE{gate: check_spec}
-  GATE -->|metrics 满足 spec| PASS[pass]
-  GATE -->|越界| FAIL[fail + spec_failures]
+flowchart TB
+  subgraph topdown ["自顶向下"]
+    BY["blocks.yaml / spec set<br/>{eff≥90%, ripple≤15mV}"]
+  end
+
+  subgraph bottomup ["自底向上 · 表征"]
+    LAB["lab characterize<br/>Session → fit"]
+    LTS["LTspice → .net<br/>pipeline sync"]
+  end
+
+  subgraph spine ["共享脊柱"]
+    MAN[(manifest<br/>spec + provenance.metrics)]
+    SIM[sim: ngspice 全局]
+    GATE{gate}
+  end
+
+  BY -->|spec| MAN
+  LAB & LTS -->|subckt + metrics| MAN
+  MAN --> SIM --> GATE
+  BY -->|operating_point| GATE
+  GATE -->|metrics ≥ spec| PASS[pass]
+  GATE -->|spec_failures| FAIL[fail]
+  GATE -->|valid_range 越界| WARN[warn]
 ```
+
+**Agent 全自动路径**：维护 `blocks.yaml` + `blocks/*` → `watch_once` → 上图全流程，无需逐步 `spec set` / `model build`。
 
 ### 10.8 里程碑（续 §6）
 
@@ -334,9 +368,10 @@ flowchart LR
 | **M6 gate** ✅ | `check_spec` + `GateEntry.spec_status/spec_failures` + `summary.spec_failures` | **完成**：pass/fail/未表征三态单测 |
 | **M7 CLI/agent** ✅ | `spec set` + `model build --metrics` + `spec_set`/`model_build` 工具 | **完成**：CLI 端到端 下发→回填→gate fail（eff 88<90）；`--from-meas` 日志解析延后 |
 
-### 10.9 待确认（进入 M5 前）
+### 10.9 设计决策（已确认）
 
 - [x] `spec` 与 `metrics` 采用扁平区间 `{name:[min,max]}` / 标量 dict（§10.3）。
 - [x] `spec` 挂在 `ComponentMapping`、`metrics` 挂在 `ModelProvenance`（§10.2）。
 - [x] gate 中 spec 不达标为 **fail（硬）**，valid_range 越界为 **warn（软）**（§10.4）。
-- [x] metrics 先支持 `--metrics` 直传，`--from-meas` 日志解析作为可选后续（§10.5）。
+- [x] metrics 支持直传、`metrics_file`、lab 同步；`--from-meas` 日志解析延后（§10.5）。
+- [x] 叙事对齐：**实验室为基础**，自顶向下 / 自底向上为两种设计方法，manifest → sim → gate 为共享脊柱（§10.1、§10.7）。

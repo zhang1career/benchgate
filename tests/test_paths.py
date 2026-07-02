@@ -24,6 +24,8 @@ def test_benchgate_paths_anchor_on_design(tmp_path: Path, monkeypatch) -> None:
     assert p.subckt == tmp_path / "home" / "models" / "subckt"
     assert p.config == tmp_path / "home" / "config"
     assert p.state.parent == tmp_path / "home" / "state"
+    assert p.blocks_yaml == design / "models" / "blocks.yaml"
+    assert p.blocks_dir == design / "models" / "blocks"
 
 
 def test_resolve_project_path_relative_to_design(tmp_path: Path) -> None:

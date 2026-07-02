@@ -72,10 +72,18 @@ def cmd_sim_cosim(args: argparse.Namespace) -> int:
 
 
 def cmd_watch_once(args: argparse.Namespace) -> int:
-    result = dispatch(
-        "watch_once",
-        {"design_dir": args.design, "run_sim": not args.no_sim},
-    )
+    params: dict = {"design_dir": args.design, "run_sim": not args.no_sim}
+    if args.no_pipeline:
+        params["run_pipeline"] = False
+    if args.no_gate:
+        params["run_gate"] = False
+    result = dispatch("watch_once", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_pipeline_sync(args: argparse.Namespace) -> int:
+    result = dispatch("pipeline_sync", {"design_dir": args.design})
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -320,12 +328,23 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--profile", default="hbridge_pwm_closed")
     sc.set_defaults(func=cmd_sim_cosim)
 
-    p_watch = sub.add_parser("watch", help="Design change triggers")
+    p_watch = sub.add_parser("watch", help="Agent pipeline: blocks.yaml + KiCad change triggers")
     watch_sub = p_watch.add_subparsers(dest="watch_cmd", required=True)
-    wo = watch_sub.add_parser("once")
+    wo = watch_sub.add_parser("once", help="Pipeline sync → mapping → sim → gate")
     wo.add_argument("--design", default="design")
-    wo.add_argument("--no-sim", action="store_true")
+    wo.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
+    wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
+    wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
     wo.set_defaults(func=cmd_watch_once)
+
+    p_pipeline = sub.add_parser("pipeline", help="Agent automation from models/blocks.yaml")
+    pipeline_sub = p_pipeline.add_subparsers(dest="pipeline_cmd", required=True)
+    ps = pipeline_sub.add_parser(
+        "sync",
+        help="Build local subckt models + spec/metrics from blocks.yaml (no manual model build)",
+    )
+    ps.add_argument("--design", default="design")
+    ps.set_defaults(func=cmd_pipeline_sync)
 
     p_gate = sub.add_parser("gate", help="Bench vs sim quality")
     gate_sub = p_gate.add_subparsers(dest="gate_cmd", required=True)

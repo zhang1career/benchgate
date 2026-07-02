@@ -1,0 +1,4 @@
+.subckt BUCK vin sw gnd
+R1 vin sw 100m
+C1 sw gnd 10u
+.ends BUCK

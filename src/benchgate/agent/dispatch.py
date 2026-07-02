@@ -163,6 +163,19 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             ]
         }
 
+    if name == "pipeline_sync":
+        from benchgate.pipeline.local_blocks import sync_local_blocks
+
+        p = _paths_for_design(args["design_dir"], args)
+        return sync_local_blocks(
+            models_dir=p.models,
+            manifest_path=p.manifest,
+            subckt_dir=p.subckt,
+            global_models_dir=p.global_models,
+            blocks_yaml=p.blocks_yaml,
+            tmp_dir=p.tmp_root / "pipeline",
+        )
+
     if name == "lab_capture":
         p = _paths_for_design(args["design_dir"], args)
         bench = _open_bench(p, args)
@@ -433,7 +446,11 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             sim_profile_path=p.sim_profile,
             subckt_dir=p.subckt,
             global_models_dir=p.global_models,
+            blocks_yaml=p.blocks_yaml,
+            tmp_dir=p.tmp_root / "pipeline",
+            run_pipeline=bool(args.get("run_pipeline", True)),
             run_sim=bool(args.get("run_sim", True)),
+            run_gate=bool(args.get("run_gate", True)),
         )
 
     raise NotImplementedError(name)
