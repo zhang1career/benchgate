@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from benchgate import __version__
 from benchgate.agent.dispatch import dispatch
 from benchgate.agent.tools import list_tools
 from benchgate.io.manifest import load_manifest
@@ -243,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="benchgate",
         description="Bench capture → SPICE models → regression sim → quality gate",
     )
+    parser.add_argument("--version", action="version", version=f"benchgate {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_map = sub.add_parser("mapping", help="KiCad → manifest mapping")
