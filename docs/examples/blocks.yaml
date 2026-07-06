@@ -1,0 +1,28 @@
+# Agent automation: local LTspice blocks → ngspice subckt + spec/metrics
+# Copy to <design>/models/blocks.yaml and add netlists under models/blocks/
+#
+# Agent / watch workflow (fully automated):
+#   1. Edit blocks.yaml (spec budget) and drop blocks/*.net (LTspice export)
+#   2. benchgate pipeline sync   OR   benchgate watch once
+#   → subckt built, manifest updated, gate checks spec vs metrics
+#
+# .asc sources require LTspice (or Wine) + spicelib; prefer .net on macOS headless.
+
+version: 1
+
+operating_point:
+  vsupply_v: 5.0
+  temp_c: 25
+
+blocks:
+  - kicad_key: "Regulator:Buck::BUCK1"
+    reference: U3
+    source: blocks/buck.net
+    sim_name: BUCK
+    spec:
+      eff_pct: [90, 100]
+      ripple_mv: [0, 15]
+    metrics_file: blocks/buck.metrics.json
+    valid_range:
+      vsupply_v: [4.5, 5.5]
+      temp_c: [-10, 85]

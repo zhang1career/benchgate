@@ -1,4 +1,5 @@
 .benchgate/
+
 # KiCad project trees are local; track only per-project lab config scaffold.
 design/**
 !design/**/
@@ -15,3 +16,6 @@ __pycache__/
 .ruff_cache/
 *.raw
 Project Outputs/
+
+# agents
+.cursor

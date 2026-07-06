@@ -27,6 +27,56 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "model_build": {
+        "description": (
+            "Build an ngspice subckt from a local non-bench source (e.g. an "
+            "LTspice-exported .net/.cir netlist) and register it in the manifest "
+            "with provenance. Global engine stays ngspice; this only supplies a model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
+                "kicad_key": {"type": "string"},
+                "reference": {"type": "string"},
+                "provider": {"type": "string", "enum": ["ltspice"], "description": "Model source (default: ltspice)"},
+                "source_file": {"type": "string", "description": "Path to .net/.cir netlist"},
+                "sim_name": {"type": "string", "description": "Subckt name to emit"},
+                "pins": {"type": "string", "description": "External pins (space-separated); required to wrap a flat netlist"},
+                "valid_range": {"type": "object", "description": "Operating-range assumptions (ports/freq/temp/bias)"},
+                "metrics": {"type": "object", "description": "Achieved performance metrics {name: value} from the local sim"},
+                "notes": {"type": "string"},
+            },
+            "required": ["design_dir", "kicad_key", "source_file", "sim_name"],
+        },
+    },
+    "spec_set": {
+        "description": (
+            "Set a top-down performance budget (spec) on a component: "
+            "{metric: [min, max]}. gate_report checks achieved metrics against it (pass/fail)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "kicad_key": {"type": "string"},
+                "reference": {"type": "string"},
+                "spec": {"type": "object", "description": "{metric: [min, max]} required performance budget"},
+            },
+            "required": ["design_dir", "kicad_key", "spec"],
+        },
+    },
+    "model_status": {
+        "description": "Report per-component model source/provenance and valid_range from the manifest",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "lab_capture": {
         "description": "Step-response capture (scope + optional DMM/AWG) → fit → subckt + manifest + session",
         "parameters": {
@@ -150,6 +200,28 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "sim_sweep": {
+        "description": (
+            "Run a sim profile over a grid of overrides and collect one metric per point. "
+            "Axes: params (override .param NAME) and sets (override an element value, e.g. R11). "
+            "Metric spec is 'signal[:metric[:window_after]]' (metric: min/max/avg/rms/pp/final)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "profile": {"type": "string"},
+                "metric": {"type": "string", "description": "e.g. 'v(n_hdr):min:250u'"},
+                "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
+                "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
+                "pass_gte": {"type": "number", "description": "Mark point passed if metric >= this"},
+                "pass_lte": {"type": "number", "description": "Mark point passed if metric <= this"},
+            },
+            "required": ["design_dir", "profile", "metric"],
+        },
+    },
     "sim_cosim": {
         "description": "Closed-loop cosim: compile firmware control.c, segment ngspice, validate",
         "parameters": {
@@ -172,17 +244,39 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_path": {"type": "string"},
                 "sim_raw_path": {"type": "string"},
+                "operating_point": {
+                    "type": "object",
+                    "description": "Actual operating point (e.g. {vsupply_v, temp_c, freq_hz}) checked against each model's valid_range",
+                },
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "pipeline_sync": {
+        "description": (
+            "Agent automation: read models/blocks.yaml, build local subckt models "
+            "(.net/.cir/.asc), apply spec/metrics/valid_range to manifest — no manual model build steps"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
             },
             "required": ["design_dir"],
         },
     },
     "watch_once": {
-        "description": "Detect design changes and run mapping + optional sim pipeline",
+        "description": (
+            "One-shot agent pipeline: detect KiCad + blocks.yaml changes → pipeline sync "
+            "(local models/spec/metrics) → mapping sync → optional sim → gate (spec + valid_range)"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
-                "run_sim": {"type": "boolean"},
+                "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
+                "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
+                "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
             },
             "required": ["design_dir"],
         },

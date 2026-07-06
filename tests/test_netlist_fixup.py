@@ -1,6 +1,11 @@
 """Tests for gate-drive netlist rewrite."""
 
-from benchgate.sim.netlist import format_rload, inject_isense_path, split_gate_drive_nets
+from benchgate.sim.netlist import (
+    _fix_zero_ohm_links,
+    format_rload,
+    inject_isense_path,
+    split_gate_drive_nets,
+)
 
 LEGACY = """
 XU2 VIN_PORT /Gate_Drive/_NO_NET_ /Gate_Drive/_NO_NET_ /Gate_Drive/SW_IN /Gate_Drive/PWM_HIN1 /Gate_Drive/PWM_LIN1 GND /Gate_Drive/_NO_NET_ UCC27211
@@ -52,6 +57,13 @@ def test_name_refresh_bus_on_labeled_schematic() -> None:
     assert "/Gate_Drive/_NO_NET_" not in out
     assert "/Gate_Drive/BST_1" in out
     assert "benchgate: R97 removed" in out
+
+
+def test_fix_zero_ohm_links() -> None:
+    netlist = "R5 Net-_C2-Pad1_ Net-_U1-THRES_ 0\nR6 Net-_C2-Pad1_ Net-_U1-TRIG_ 0\n"
+    out = _fix_zero_ohm_links(netlist)
+    assert "R5 Net-_C2-Pad1_ Net-_U1-THRES_ 1m" in out
+    assert "R6 Net-_C2-Pad1_ Net-_U1-TRIG_ 1m" in out
 
 
 def test_fix_ams1117_pin_order() -> None:

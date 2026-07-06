@@ -10,7 +10,20 @@
 1. **KiCad 工程是真源（Source of Truth）** — 工程师在 Eeschema / Pcbnew 中审核；Git 管理 `design/*.kicad_pro`。
 2. **不重复 KiCad 已有能力** — 交互仿真、ERC/DRC GUI、符号 Simulation Model Editor 交给 KiCad。
 3. **不重复 MCP 生态已有能力** — Agent 改原理图/PCB、制造导出、布局辅助，优先委托 `kicad-mcp-pro` / `kicad-tools`。
-4. **benchgate 只做差异化** — 实验室实测建模、manifest 审计、后台回归仿真、实测 vs 仿真质量闭环。
+4. **benchgate 只做差异化** — 支撑 **设计–验证闭环**：实验室为测量基础；**自顶向下**（spec 预算）与 **自底向上**（表征 → 模型）经 manifest → ngspice → gate 汇合；不重复 KiCad GUI 仿真与 MCP 改图。
+
+### 1.1 设计–验证闭环
+
+benchgate 支持两种设计方法，共享同一条验证脊柱（详见 [README](../README.md)）：
+
+| 层次 | 含义 | 主要模块 |
+|------|------|----------|
+| **基础** | 物理测量与 Session | `lab/` · `instruments/` · `lab/fit` |
+| **自顶向下** | 从性能预算驱动设计与签核 | `blocks.yaml` · `spec` · `pipeline/` · `gate/`（spec 比对） |
+| **自底向上** | 从实测/局部仿真逐级集成 | `lab characterize` · `providers/` · `model build` |
+| **共享脊柱** | 全局回归与门禁 | `mapping/` · `sim/` · `gate/` · `watch/` |
+
+全局仿真引擎只有 **ngspice**；LTspice、台架等为**离线**模型来源。
 
 ```mermaid
 flowchart TB
@@ -20,28 +33,42 @@ flowchart TB
     SIM_GUI[Simulator 交互看图]
   end
 
-  subgraph delegate ["委托层（不纳入 benchgate 核心代码）"]
+  subgraph delegate ["委托层"]
     CLI[kicad-cli]
     MCP[kicad-mcp-pro]
     KCT[kicad-tools]
   end
 
-  subgraph benchgate ["benchgate 核心"]
-    WATCH[watch: 变更触发]
-    MAN[manifest 审计]
-    LAB[lab: PyVISA 采参]
-    FIT[fit: 波形→subckt]
-    SIM[sim: 批跑 + 注入实测模型]
-    GATE[gate: 质量报告]
+  subgraph topdown ["自顶向下"]
+    SPEC["spec / blocks.yaml"]
   end
 
-  SCH & PCB --> CLI & MCP & KCT
-  WATCH --> MAN & SIM
+  subgraph spine ["共享脊柱"]
+    WATCH[watch: 变更触发]
+    MAN[manifest]
+    SIM[sim: ngspice 批跑]
+    GATE[gate: spec + valid_range + RMSE]
+  end
+
+  subgraph bottomup ["自底向上"]
+    PIPE[pipeline / LTspice]
+    PROV[providers / model build]
+  end
+
+  subgraph foundation ["基础：实验室"]
+    LAB[lab: PyVISA 采参]
+    FIT[fit: 波形→subckt]
+  end
+
+  SPEC --> GATE
   LAB --> FIT --> MAN
+  PIPE & PROV --> MAN
+  MAN --> SIM --> GATE
+  GATE --> human
+  WATCH[watch: 变更触发] --> MAN & SIM & GATE
+  SCH & PCB --> CLI & MCP & KCT
   MAN -->|"写 Sim.*"| SCH
   SIM --> CLI
-  SIM --> GATE
-  GATE --> human
   SIM_GUI --> SCH
 ```
 
@@ -51,16 +78,18 @@ flowchart TB
 
 ### 2.1 benchgate **必须做**（In Scope）
 
-| 模块 | 职责 | 产出 |
-|------|------|------|
-| `watch/` | 监听 `design/` 文件变更或 Git hook | 触发 sync / sim 任务 |
-| `mapping/` | 扫描符号实例，维护 `models/manifest.yaml` | ready / pending / unmapped 状态 |
-| `lab/` | PyVISA 阶跃/脉冲采数 | `models/captured/*.csv` |
-| `lab/fit` | 拟合或 PWL 表生成 | `models/subckt/*.lib` |
-| `kicad/spice_fields` | **仅**写回实测相关的 `Sim.*` 字段 | 符号与 manifest 一致 |
-| `sim/` | 调用 `kicad-cli` 导 SPICE 网表 → 注入 `.include` → `ngspice -b` | `reports/*.json` |
-| `gate/` | 仿真波形 vs bench RMSE、回归 diff | PR / 通知 |
-| `agent/` | 编排上述工具；**不**实现完整 EDA 工具集 | MCP 或内部 dispatch |
+| 模块 | 层次 | 职责 | 产出 |
+|------|------|------|------|
+| `lab/` · `instruments/` | **基础** | PyVISA 采数、Session 存储 | `models/captured/sessions/<id>/` |
+| `lab/fit` | **基础** | 拟合或 PWL → subckt | `~/.benchgate/models/subckt/*.lib` |
+| `providers/` · `pipeline/` | **自底向上** | LTspice 等局部网表 → ngspice subckt | subckt + `provenance.metrics` |
+| `blocks.yaml` · `spec set` | **自顶向下** | 性能预算、`operating_point` | `ComponentMapping.spec` |
+| `mapping/` | **共享** | 扫描符号，维护 manifest | ready / pending / unmapped |
+| `sim/` | **共享** | kicad-cli 导网表 → 注入 `.include` → `ngspice -b` | `reports/sim/` |
+| `gate/` | **共享** | metrics vs spec（fail）、工作点 vs valid_range（warn）、bench vs sim RMSE | `gate_report.json` |
+| `watch/` | **共享** | 监听 KiCad + `blocks.yaml` 变更 | 触发 pipeline / sync / sim / gate |
+| `kicad/spice_fields` | **共享** | **仅**写回模型相关的 `Sim.*` | 符号与 manifest 一致 |
+| `agent/` | **共享** | 编排上述工具 | dispatch / MCP |
 
 ### 2.2 benchgate **不做**（Out of Scope → 直接用 KiCad / 第三方）
 
@@ -288,21 +317,59 @@ KICAD_MCP_PROFILE=analysis   # benchgate 并存时建议 analysis 或 pcb_only
   → Git commit
 ```
 
-### 7.2 benchgate 后台（零额外操作）
+### 7.2 设计–验证闭环（benchgate）
 
-CLI 入口：**`benchgate`**（Python 包名仍为 `benchgate`）。
+```
+基础（实验室）     自顶向下                    自底向上
+lab 采数·Session   spec / blocks.yaml         lab characterize
+      │                  │                    LTspice → pipeline
+      └──── fit ─────────┼──── subckt + metrics ────┘
+                         ▼
+              manifest → sim (ngspice) → gate
+                         │
+              spec fail / range warn / RMSE → 迭代或签核
+```
+
+- **实验室**是闭环的物理测量层，服务于自底向上表征，也用于最终样机签核（bench vs sim）。
+- **自顶向下**不绕开自底向上：spec 写完后，仍需 LTspice 或 lab 产出 `metrics`，gate 才能判定。
+- 两种方法可在同一 manifest 混用（块 A 台架、块 B LTspice）。
+
+### 7.3 自顶向下（要求驱动）
+
+```
+1. 编写 models/blocks.yaml（spec + operating_point + valid_range）
+2. 按 spec 在 LTspice 等工具调电路 → 导出 blocks/*.net + *.metrics.json
+3. benchgate watch once  （或 pipeline sync → mapping sync → sim run → gate report）
+4. 读 gate_report：spec_failures → 改电路或修订预算
+```
+
+Agent 入口：`pipeline_sync` · `watch_once` · `spec_set`（手工改 spec 时）。
+
+### 7.4 自底向上（证据驱动）
+
+| 表征手段 | 典型命令 | 产出 |
+|----------|----------|------|
+| 实验室（台架） | `lab characterize` | Session + subckt + `provenance.metrics` |
+| 局部仿真 | `model build` · `pipeline sync` | subckt + metrics（来源 LTspice） |
+| 厂商/手册 | `model build`（扩展） | subckt + provenance |
+
+共性：`表征 → manifest → sim run → gate report`。
+
+### 7.5 benchgate 后台编排（`watch once`）
+
+CLI 入口：**`benchgate`**。
 
 ```
 benchgate watch once
+  → pipeline sync（若有 blocks.yaml：subckt + spec + metrics）
   → mapping sync（kicad-tools 读符号 + Sim.* 状态）
-  → 若有 pending 且配置 auto_capture → lab capture
-  → fit → 写 models/subckt + manifest + Sim.*
-  → kicad-cli export netlist -f spice
-  → sim inject + ngspice -b
-  → gate 报告 → reports/
+  → sim run（kicad-cli export netlist -f spice → ngspice -b）
+  → gate report（spec + valid_range + RMSE）→ reports/
 ```
 
-### 7.3 Agent 辅助（Cursor MCP）
+`--no-pipeline` / `--no-sim` / `--no-gate` 可跳过步骤。持续监听见根目录 [TODO.md](../TODO.md)（`watch loop` 待实现）。
+
+### 7.6 Agent 辅助（Cursor MCP）
 
 ```
 用户：「把 U3 周围去耦电容加到 4 颗并重新布局」
@@ -320,25 +387,67 @@ benchgate watch once
 
 CLI 与子命令对应关系：`benchgate mapping sync` ↔ `mapping_sync`，`benchgate sim run` ↔ `sim_run`，等。
 
-benchgate 对外只暴露 **lab + sim + manifest** 工具，不暴露 PCB 布线：
+工具按闭环层次分组（不暴露 PCB 布线 → kicad-mcp-pro）：
+
+**基础 · 实验室**
 
 | 工具 | 说明 |
 |------|------|
-| `mapping_sync` | kicad-tools 扫描 → 更新 manifest |
-| `mapping_status` | ready / pending / unmapped |
 | `lab_list` | 列出仪器 + 生效角色绑定 |
-| `lab_read` | 读标量（默认角色 dmm，可按 instrument/role 选） |
+| `lab_read` | 读标量（默认角色 dmm） |
 | `lab_capture_waveform` | scope 单次波形 → 存 session |
 | `lab_capture` | 采数 + 拟合 → subckt + manifest + session |
 | `lab_apply_model` | 写 Sim.* + manifest |
 | `lab_query_sessions` | 按元件/时间/标签查历史会话 |
 | `lab_metric_series` | 跨会话抽取派生指标时间序列 |
-| `lab_metric_drift` | 指标趋势 + 统计（slope/s、mean、std） |
-| `sim_run` | kicad-cli + ngspice 批跑 |
-| `gate_report` | 实测 vs 仿真 / 回归 diff |
-| `watch_once` | 单次触发上述流水线 |
+| `lab_metric_drift` | 指标趋势 + 统计 |
 
-**不在 benchgate 暴露**：`sch_add_wire`、`pcb_add_track` 等 → kicad-mcp-pro。
+**自顶向下**
+
+| 工具 | 说明 |
+|------|------|
+| `spec_set` | 下发/更新某块性能预算 `{metric: [min, max]}` |
+| `pipeline_sync` | 读 `blocks.yaml` → subckt + spec/metrics → manifest |
+| `watch_once` | 变更检测 → pipeline → mapping → sim → gate |
+
+**自底向上**
+
+| 工具 | 说明 |
+|------|------|
+| `model_build` | 从 `.net`/`.cir` 构建 subckt 并登记 manifest + metrics |
+| `model_status` | 各块 source / valid_range / metrics / spec |
+
+**共享脊柱**
+
+| 工具 | 说明 |
+|------|------|
+| `mapping_sync` | kicad-tools 扫描 → 更新 manifest |
+| `mapping_status` | ready / pending / unmapped |
+| `sim_run` | kicad-cli + ngspice 批跑 |
+| `gate_report` | spec vs metrics · valid_range · bench vs sim RMSE |
+
+### 8.1 自顶向下自动化（`models/blocks.yaml`）
+
+Agent 只需维护 YAML + 网表文件，无需手工调用 `model_build` / `spec_set`：
+
+```yaml
+# design/models/blocks.yaml
+version: 1
+operating_point:
+  vsupply_v: 5.0
+blocks:
+  - kicad_key: "Regulator:Buck::BUCK1"
+    reference: U3
+    source: blocks/buck.net          # 或 .cir；.asc 需本机 LTspice + spicelib
+    sim_name: BUCK
+    spec: {eff_pct: [90, 100]}
+    metrics_file: blocks/buck.metrics.json
+    valid_range: {vsupply_v: [4.5, 5.5]}
+```
+
+CLI：`benchgate pipeline sync` · Agent：`pipeline_sync` · 编排：`benchgate watch once`（默认四步全开，`--no-pipeline` / `--no-sim` / `--no-gate` 可跳过）。
+
+示例见 `docs/examples/blocks.yaml` 与 `docs/examples/blocks/`。
 
 ---
 
@@ -349,6 +458,8 @@ benchgate/
 ├── design/                    # *.kicad_pro 工程（Git 真源）
 ├── models/
 │   ├── manifest.yaml          # lib_id::value → spice 绑定 + 实测元数据
+│   ├── blocks.yaml            # Agent 自动化：本地块 spec/metrics/网表路径（§8.1）
+│   ├── blocks/                # LTspice 导出 .net/.cir（或 .asc + LTspice）
 │   ├── lab.yaml               # 项目级角色绑定 + capture 默认（可选，§12）
 │   ├── subckt/                # 实测/拟合 .lib
 │   └── captured/sessions/<id>/ # 每次采集一个 session（npz 波形 + csv 标量 + derived.json + session.yaml）
@@ -359,22 +470,31 @@ benchgate/
 └── sim_profiles.yaml          # .tran / .ac 模板（注入网表）
 ```
 
-### manifest 键名（KiCad）
+### manifest 键名（KiCad · version 2）
 
 ```yaml
-# 示例
+# 示例：自底向上（台架）+ spec（自顶向下）可并存
 - kicad_key: "Amplifier_Operational:LM358::LM358"
   reference: "U3"
-  spice_kind: subckt          # passive | subckt | table | builtin
-  sim_library: "models/subckt/LM358_meas.lib"
+  spice_kind: subckt
+  sim_library: "subckt/LM358_MEAS.lib"
   sim_name: "LM358_MEAS"
   sim_pins: "1=+ 2=- 3=OUT 4=V+ 5=V-"
-  measured:
-    captured_at: "2026-06-08T12:00:00Z"
-    session_id: "20260608T120000Z_ab12"
-    params: { tau_s: 1.2e-4 }
-  status: ready               # ready | pending | unmapped
+  spec:                        # 自顶向下：性能预算
+    gbw_hz: [1.0e6, .inf]
+  provenance:
+    source: bench              # bench | ltspice | vendor | …
+    metrics: { gbw_hz: 1.2e6 } # 自底向上：实际达成
+    valid_range:
+      vsupply_v: [3.0, 32.0]
+    measured:                  # source=bench 时的 Session 明细
+      captured_at: "2026-06-08T12:00:00Z"
+      session_id: "20260608T120000Z_ab12"
+      params: { tau_s: 1.2e-4 }
+  status: ready
 ```
+
+`gate`：`metrics` vs `spec` → **fail**；`operating_point` vs `valid_range` → **warn**。详见 [RFC §10](RFC_LOCAL_SIM_MODEL_PROVIDER.md#10-扩展自顶向下-spec--metrics-闭环v03待评审)。
 
 ---
 

@@ -15,6 +15,59 @@ from benchgate.mapping.engine import mapping_status, sync_project
 from benchgate.paths import benchgate_paths, resolve_project_path
 
 
+CLI_DESCRIPTION = (
+    "Design–verification loop for KiCad 10: lab capture and local block models "
+    "→ manifest → ngspice batch sim → quality gate (spec / valid_range / RMSE)."
+)
+
+DOCS_EPILOG = """\
+documentation (in the benchgate install / source tree):
+  README.md                 workflows (top-down / bottom-up)
+  docs/examples/blocks.yaml local block automation
+  docs/MINIMUM_SCOPE.md     architecture and agent tools"""
+
+DESIGN_ARG_HELP = (
+    "KiCad project root (contains *.kicad_pro). "
+    "Default: 'design' relative to the current working directory — "
+    "when run outside a project, pass an absolute path, e.g. "
+    "--design /path/to/myboard"
+)
+
+ROOT_EPILOG = f"""\
+examples:
+  benchgate mapping sync --design /path/to/myboard
+  benchgate watch once --design /path/to/myboard
+  benchgate pipeline sync --design /path/to/myboard
+
+{DOCS_EPILOG}"""
+
+WATCH_ONCE_EPILOG = f"""\
+Prerequisites (top-down): edit <design>/models/blocks.yaml and add blocks/*.net
+and *.metrics.json (see docs/examples/blocks.yaml).
+
+example:
+  benchgate watch once --design /path/to/myboard
+
+{DOCS_EPILOG}"""
+
+PIPELINE_SYNC_EPILOG = f"""\
+Read <design>/models/blocks.yaml → build subckts, apply spec/metrics → manifest.
+Does not run mapping sync, sim, or gate (use watch once for the full pipeline).
+
+example:
+  benchgate pipeline sync --design /path/to/myboard
+
+{DOCS_EPILOG}"""
+
+
+def _help_formatter() -> type[argparse.RawDescriptionHelpFormatter]:
+    return argparse.RawDescriptionHelpFormatter
+
+
+def _add_design_arg(parser: argparse.ArgumentParser, *, default: str = "design") -> None:
+    parser.add_argument("--design", default=default, help=DESIGN_ARG_HELP)
+
+
 def _paths(args: argparse.Namespace):
     return benchgate_paths(args.design, manifest=args.manifest)
 
@@ -55,6 +108,37 @@ def cmd_sim_run(args: argparse.Namespace) -> int:
     return 0 if result.get("success") else 1
 
 
+def cmd_sim_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.sweep import parse_axis
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_sweep")
+    params: dict[str, list[str]] = {}
+    sets: dict[str, list[str]] = {}
+    for spec in args.param or []:
+        name, values = parse_axis(spec)
+        params[name] = values
+    for spec in args.set or []:
+        name, values = parse_axis(spec)
+        sets[name] = values
+    call_args: dict = {
+        "design_dir": str(p.design),
+        "manifest_path": str(p.manifest),
+        "output_dir": str(out_dir),
+        "profile": args.profile,
+        "metric": args.metric,
+        "params": params,
+        "sets": sets,
+    }
+    if args.pass_gte is not None:
+        call_args["pass_gte"] = args.pass_gte
+    if args.pass_lte is not None:
+        call_args["pass_lte"] = args.pass_lte
+    result = dispatch("sim_sweep", call_args)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_sim_cosim(args: argparse.Namespace) -> int:
     p = _paths(args)
     out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_cosim")
@@ -72,10 +156,18 @@ def cmd_sim_cosim(args: argparse.Namespace) -> int:
 
 
 def cmd_watch_once(args: argparse.Namespace) -> int:
-    result = dispatch(
-        "watch_once",
-        {"design_dir": args.design, "run_sim": not args.no_sim},
-    )
+    params: dict = {"design_dir": args.design, "run_sim": not args.no_sim}
+    if args.no_pipeline:
+        params["run_pipeline"] = False
+    if args.no_gate:
+        params["run_gate"] = False
+    result = dispatch("watch_once", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_pipeline_sync(args: argparse.Namespace) -> int:
+    result = dispatch("pipeline_sync", {"design_dir": args.design})
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -86,6 +178,8 @@ def cmd_gate_report(args: argparse.Namespace) -> int:
     params: dict = {"design_dir": str(p.design), "manifest_path": str(p.manifest), "output_path": str(out)}
     if args.sim_raw:
         params["sim_raw_path"] = str(resolve_project_path(p.design, args.sim_raw, p.reports / "sim" / "sim_waveform.csv"))
+    if args.operating_point:
+        params["operating_point"] = json.loads(args.operating_point)
     result = dispatch("gate_report", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -225,6 +319,51 @@ def cmd_lab_query_waveform(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_model_build(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "kicad_key": args.kicad_key,
+        "provider": args.provider,
+        "source_file": args.source_file,
+        "sim_name": args.sim_name,
+    }
+    if args.reference:
+        params["reference"] = args.reference
+    if args.pins:
+        params["pins"] = args.pins
+    if args.notes:
+        params["notes"] = args.notes
+    if args.valid_range:
+        params["valid_range"] = json.loads(args.valid_range)
+    if args.metrics:
+        params["metrics"] = json.loads(args.metrics)
+    result = dispatch("model_build", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_spec_set(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "kicad_key": args.kicad_key,
+        "spec": json.loads(args.spec),
+    }
+    if args.reference:
+        params["reference"] = args.reference
+    result = dispatch("spec_set", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_model_status(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.manifest:
+        params["manifest_path"] = args.manifest
+    result = dispatch("model_status", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_agent_tools(_: argparse.Namespace) -> int:
     print(json.dumps(list_tools(), indent=2, ensure_ascii=False))
     return 0
@@ -242,62 +381,102 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="benchgate",
-        description="Bench capture → SPICE models → regression sim → quality gate",
+        description=CLI_DESCRIPTION,
+        epilog=ROOT_EPILOG,
+        formatter_class=_help_formatter(),
     )
     parser.add_argument("--version", action="version", version=f"benchgate {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     p_map = sub.add_parser("mapping", help="KiCad → manifest mapping")
     map_sub = p_map.add_subparsers(dest="map_cmd", required=True)
     ms = map_sub.add_parser("sync", help="Sync schematic → manifest.yaml")
-    ms.add_argument("--design", default="design", help="KiCad project directory")
+    _add_design_arg(ms)
     ms.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     ms.set_defaults(func=cmd_mapping_sync)
     mst = map_sub.add_parser("status")
-    mst.add_argument("--design", default="design", help="KiCad project directory")
+    _add_design_arg(mst)
     mst.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     mst.set_defaults(func=cmd_mapping_status)
 
     p_sim = sub.add_parser("sim", help="ngspice simulation")
     sim_sub = p_sim.add_subparsers(dest="sim_cmd", required=True)
     sr = sim_sub.add_parser("run")
-    sr.add_argument("--design", default="design", help="KiCad project directory")
+    _add_design_arg(sr)
     sr.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     sr.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
     sr.add_argument("--profile", default="default")
     sr.set_defaults(func=cmd_sim_run)
+    sw = sim_sub.add_parser(
+        "sweep",
+        help="Run a profile over a grid of param/component overrides; collect one metric per point",
+    )
+    _add_design_arg(sw)
+    sw.add_argument("--manifest", default=None, help="Override manifest path")
+    sw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_sweep)")
+    sw.add_argument("--profile", default="default")
+    sw.add_argument("--metric", required=True, help="signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u'")
+    sw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
+    sw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
+    sw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
+    sw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
+    sw.set_defaults(func=cmd_sim_sweep)
     sc = sim_sub.add_parser("cosim", help="Closed-loop cosim with firmware control.c")
-    sc.add_argument("--design", default="design", help="KiCad project directory")
+    _add_design_arg(sc)
     sc.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     sc.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_cosim)")
     sc.add_argument("--profile", default="hbridge_pwm_closed")
     sc.set_defaults(func=cmd_sim_cosim)
 
-    p_watch = sub.add_parser("watch", help="Design change triggers")
+    p_watch = sub.add_parser("watch", help="Agent pipeline: blocks.yaml + KiCad change triggers")
     watch_sub = p_watch.add_subparsers(dest="watch_cmd", required=True)
-    wo = watch_sub.add_parser("once")
-    wo.add_argument("--design", default="design")
-    wo.add_argument("--no-sim", action="store_true")
+    wo = watch_sub.add_parser(
+        "once",
+        help="Pipeline sync → mapping → sim → gate",
+        epilog=WATCH_ONCE_EPILOG,
+        formatter_class=_help_formatter(),
+    )
+    _add_design_arg(wo)
+    wo.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
+    wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
+    wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
     wo.set_defaults(func=cmd_watch_once)
+
+    p_pipeline = sub.add_parser("pipeline", help="Agent automation from models/blocks.yaml")
+    pipeline_sub = p_pipeline.add_subparsers(dest="pipeline_cmd", required=True)
+    ps = pipeline_sub.add_parser(
+        "sync",
+        help="Build local subckt models + spec/metrics from blocks.yaml (no manual model build)",
+        epilog=PIPELINE_SYNC_EPILOG,
+        formatter_class=_help_formatter(),
+    )
+    _add_design_arg(ps)
+    ps.set_defaults(func=cmd_pipeline_sync)
 
     p_gate = sub.add_parser("gate", help="Bench vs sim quality")
     gate_sub = p_gate.add_subparsers(dest="gate_cmd", required=True)
     gr = gate_sub.add_parser("report")
-    gr.add_argument("--design", default="design", help="KiCad project directory")
+    _add_design_arg(gr)
     gr.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     gr.add_argument("--out", default=None, help="Output JSON path (default: <design>/reports/gate_report.json)")
     gr.add_argument("--sim-raw", default=None)
+    gr.add_argument(
+        "--operating-point",
+        dest="operating_point",
+        default=None,
+        help='JSON of actual operating point for valid_range checks, e.g. \'{"vsupply_v":5.0,"temp_c":25}\'',
+    )
     gr.set_defaults(func=cmd_gate_report)
 
     p_lab = sub.add_parser("lab", help="Instrument control: capture, read, query")
     lab_sub = p_lab.add_subparsers(dest="lab_cmd", required=True)
 
     ll = lab_sub.add_parser("list", help="List instruments and effective role bindings")
-    ll.add_argument("--design", default="design")
+    _add_design_arg(ll)
     ll.set_defaults(func=cmd_lab_list)
 
     lr = lab_sub.add_parser("read", help="Read scalar value(s) (default role: dmm)")
-    lr.add_argument("--design", default="design")
+    _add_design_arg(lr)
     lr.add_argument("--role", default="dmm")
     lr.add_argument("--instrument", default=None, help="Explicit instrument name (overrides role)")
     lr.add_argument("--count", type=int, default=1)
@@ -306,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
     lr.set_defaults(func=cmd_lab_read)
 
     lc = lab_sub.add_parser("capture", help="Capture a waveform (default role: scope)")
-    lc.add_argument("--design", default="design")
+    _add_design_arg(lc)
     lc.add_argument("--role", default="scope")
     lc.add_argument("--instrument", default=None)
     lc.add_argument("--channel", type=int, default=None)
@@ -315,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     lc.set_defaults(func=cmd_lab_capture)
 
     lch = lab_sub.add_parser("characterize", help="Capture + fit + write subckt/manifest")
-    lch.add_argument("--design", default="design")
+    _add_design_arg(lch)
     lch.add_argument("--component-ref", dest="component_ref", required=True)
     lch.add_argument("--mpn", required=True)
     lch.add_argument("--kicad-key", dest="kicad_key", required=True)
@@ -327,20 +506,20 @@ def main(argv: list[str] | None = None) -> int:
     lq = lab_sub.add_parser("query", help="Query stored sessions / metrics / waveforms")
     lq_sub = lq.add_subparsers(dest="lab_query_cmd", required=True)
     lqs = lq_sub.add_parser("sessions")
-    lqs.add_argument("--design", default="design")
+    _add_design_arg(lqs)
     lqs.add_argument("--component-ref", dest="component_ref", default=None)
     lqs.add_argument("--since", default=None)
     lqs.add_argument("--until", default=None)
     lqs.set_defaults(func=cmd_lab_query_sessions)
     lqm = lq_sub.add_parser("metric")
-    lqm.add_argument("--design", default="design")
+    _add_design_arg(lqm)
     lqm.add_argument("--metric", required=True)
     lqm.add_argument("--component-ref", dest="component_ref", default=None)
     lqm.add_argument("--since", default=None)
     lqm.add_argument("--until", default=None)
     lqm.set_defaults(func=cmd_lab_query_metric)
     lqd = lq_sub.add_parser("drift", help="Metric trend + stats across sessions")
-    lqd.add_argument("--design", default="design")
+    _add_design_arg(lqd)
     lqd.add_argument("--metric", required=True)
     lqd.add_argument("--component-ref", dest="component_ref", default=None)
     lqd.add_argument("--since", default=None)
@@ -348,13 +527,54 @@ def main(argv: list[str] | None = None) -> int:
     lqd.set_defaults(func=cmd_lab_query_drift)
 
     lqw = lq_sub.add_parser("waveform")
-    lqw.add_argument("--design", default="design")
+    _add_design_arg(lqw)
     lqw.add_argument("--session", required=True)
     lqw.add_argument("--channel", default="scope_ch1")
     lqw.add_argument("--t-start", dest="t_start", type=float, default=None)
     lqw.add_argument("--t-end", dest="t_end", type=float, default=None)
     lqw.add_argument("--out", default=None, help="Export to CSV")
     lqw.set_defaults(func=cmd_lab_query_waveform)
+
+    p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
+    model_sub = p_model.add_subparsers(dest="model_cmd", required=True)
+    mb = model_sub.add_parser("build", help="Build an ngspice subckt from a .net/.cir and register it")
+    _add_design_arg(mb)
+    mb.add_argument("--kicad-key", dest="kicad_key", required=True)
+    mb.add_argument("--reference", default=None)
+    mb.add_argument("--provider", default="ltspice", choices=["ltspice"])
+    mb.add_argument("--from", dest="source_file", required=True, help="LTspice-exported .net/.cir netlist")
+    mb.add_argument("--sim-name", dest="sim_name", required=True, help="Subckt name to emit")
+    mb.add_argument("--pins", default=None, help="External pins, space-separated (required to wrap a flat netlist)")
+    mb.add_argument(
+        "--valid-range",
+        dest="valid_range",
+        default=None,
+        help='JSON of valid operating ranges, e.g. \'{"vsupply_v":[4.5,5.5],"temp_c":[-10,85]}\'',
+    )
+    mb.add_argument(
+        "--metrics",
+        default=None,
+        help='JSON of achieved metrics, e.g. \'{"vout_ripple_mv":12,"eff_pct":92}\'',
+    )
+    mb.add_argument("--notes", default=None)
+    mb.set_defaults(func=cmd_model_build)
+    mstat = model_sub.add_parser("status", help="Per-component model source / valid_range / spec / metrics")
+    _add_design_arg(mstat)
+    mstat.add_argument("--manifest", default=None, help="Override manifest path")
+    mstat.set_defaults(func=cmd_model_status)
+
+    p_spec = sub.add_parser("spec", help="Top-down performance budgets (spec) per component")
+    spec_sub = p_spec.add_subparsers(dest="spec_cmd", required=True)
+    ss = spec_sub.add_parser("set", help="Set a component's required performance budget")
+    _add_design_arg(ss)
+    ss.add_argument("--kicad-key", dest="kicad_key", required=True)
+    ss.add_argument("--reference", default=None)
+    ss.add_argument(
+        "--spec",
+        required=True,
+        help='JSON budget {metric:[min,max]}, e.g. \'{"vout_ripple_mv":[0,15],"eff_pct":[90,100]}\'',
+    )
+    ss.set_defaults(func=cmd_spec_set)
 
     p_agent = sub.add_parser("agent", help="Agent tool registry")
     agent_sub = p_agent.add_subparsers(dest="agent_cmd", required=True)
