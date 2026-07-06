@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "benchgate": {
+      "command": "/usr/local/anaconda3/envs/hw/bin/benchgate-mcp",
+      "args": [],
+      "env": {
+        "BENCHGATE_HOME": "/Users/mini/.benchgate",
+        "PATH": "/Applications/KiCad/KiCad.app/Contents/MacOS:/usr/local/anaconda3/envs/hw/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}

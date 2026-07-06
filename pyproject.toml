@@ -23,6 +23,7 @@ dev = ["pytest>=8.0", "ruff>=0.4"]
 
 [project.scripts]
 benchgate = "benchgate.cli:main"
+benchgate-mcp = "benchgate.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchgate"]

@@ -19,12 +19,14 @@ from benchgate.providers.ltspice import (
     netlist_to_subckt,
     normalize_ltspice_netlist,
 )
+from benchgate.providers.vendor import VendorModelProvider
 
 __all__ = [
     "ModelProvider",
     "register_model",
     "BenchModelProvider",
     "DatasheetModelProvider",
+    "VendorModelProvider",
     "create_model_provider",
     "LtspiceModelProvider",
     "netlist_to_subckt",

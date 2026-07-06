@@ -25,6 +25,8 @@ def watch_loop(
     run_pipeline: bool = True,
     run_sim: bool = True,
     run_gate: bool = True,
+    run_auto_capture: bool = True,
+    auto_capture_dry_run: bool = False,
     interval_s: float = 2.0,
     debounce_s: float = 1.0,
     max_iterations: int | None = None,
@@ -55,6 +57,8 @@ def watch_loop(
             run_pipeline=run_pipeline,
             run_sim=run_sim,
             run_gate=run_gate,
+            run_auto_capture=run_auto_capture,
+            auto_capture_dry_run=auto_capture_dry_run,
         )
         iterations += 1
         last_result["iterations"] = iterations

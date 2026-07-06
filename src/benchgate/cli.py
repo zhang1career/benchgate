@@ -174,6 +174,12 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sim_diagnose(args: argparse.Namespace) -> int:
+    result = dispatch("sim_diagnose", {"design_dir": args.design})
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0 if result.get("ok") else 1
+
+
 def cmd_sim_cosim(args: argparse.Namespace) -> int:
     p = _paths(args)
     out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_cosim")
@@ -200,6 +206,10 @@ def cmd_watch_once(args: argparse.Namespace) -> int:
         params["run_pipeline"] = False
     if args.no_gate:
         params["run_gate"] = False
+    if args.no_auto_capture:
+        params["run_auto_capture"] = False
+    if args.auto_capture_dry_run:
+        params["auto_capture_dry_run"] = True
     result = dispatch("watch_once", params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
@@ -227,6 +237,8 @@ def cmd_watch_loop(args: argparse.Namespace) -> int:
         run_pipeline=not args.no_pipeline,
         run_sim=not args.no_sim,
         run_gate=not args.no_gate,
+        run_auto_capture=not args.no_auto_capture,
+        auto_capture_dry_run=args.auto_capture_dry_run,
         interval_s=args.interval,
         debounce_s=args.debounce,
         max_iterations=max_iter,
@@ -249,8 +261,31 @@ def cmd_gate_report(args: argparse.Namespace) -> int:
         params["sim_raw_path"] = str(resolve_project_path(p.design, args.sim_raw, p.reports / "sim" / "sim_waveform.csv"))
     if args.operating_point:
         params["operating_point"] = json.loads(args.operating_point)
+    if args.stress_sweep:
+        params["stress_sweep"] = True
+        params["profile"] = args.profile
     result = dispatch("gate_report", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_kicad_sim_fields(args: argparse.Namespace) -> int:
+    from benchgate.kicad.sim_fields_safe import apply_sim_fields_safe
+
+    p = _paths(args)
+    sch = resolve_project_path(p.design, args.schematic, p.design / f"{p.design.name}.kicad_sch")
+    if not sch.exists():
+        for candidate in p.design.glob("*.kicad_sch"):
+            sch = candidate
+            break
+    changed = apply_sim_fields_safe(
+        sch,
+        args.reference,
+        sim_library=args.library,
+        sim_name=args.sim_name,
+        sim_pins=args.pins or "",
+    )
+    print(json.dumps({"schematic": str(sch), "reference": args.reference, "updated": changed}, indent=2))
     return 0
 
 
@@ -402,6 +437,8 @@ def cmd_model_build(args: argparse.Namespace) -> int:
         params["mpn"] = args.mpn
     if args.from_meas:
         params["from_meas"] = args.from_meas
+    if args.lib:
+        params["lib_path"] = args.lib
     if args.reference:
         params["reference"] = args.reference
     if args.pins:
@@ -448,6 +485,13 @@ def cmd_agent_call(args: argparse.Namespace) -> int:
     params = json.loads(args.params) if args.params else {}
     result = dispatch(args.tool, params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_mcp_serve(_: argparse.Namespace) -> int:
+    from benchgate.mcp_server import main as mcp_main
+
+    mcp_main()
     return 0
 
 
@@ -525,6 +569,23 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_cosim)")
     sc.add_argument("--profile", default="hbridge_pwm_closed")
     sc.set_defaults(func=cmd_sim_cosim)
+    sd = sim_sub.add_parser(
+        "diagnose",
+        help="Summarize preflight/sim_report/ngspice.log into actionable findings",
+    )
+    _add_design_arg(sd)
+    sd.set_defaults(func=cmd_sim_diagnose)
+
+    p_kicad = sub.add_parser("kicad", help="KiCad schematic utilities (KiCad 10-safe)")
+    kicad_sub = p_kicad.add_subparsers(dest="kicad_cmd", required=True)
+    ks = kicad_sub.add_parser("sim-fields", help="Set Sim.Library/Name/Pins via text edit (no Schematic.save)")
+    _add_design_arg(ks)
+    ks.add_argument("--reference", required=True, help="Component reference, e.g. U1")
+    ks.add_argument("--library", required=True, help="Sim.Library path")
+    ks.add_argument("--sim-name", dest="sim_name", required=True, help="Sim.Name subckt/model name")
+    ks.add_argument("--pins", default="", help="Sim.Pins pin map")
+    ks.add_argument("--schematic", default=None, help="Override .kicad_sch path")
+    ks.set_defaults(func=cmd_kicad_sim_fields)
 
     p_watch = sub.add_parser("watch", help="Agent pipeline: blocks.yaml + KiCad change triggers")
     watch_sub = p_watch.add_subparsers(dest="watch_cmd", required=True)
@@ -538,6 +599,12 @@ def main(argv: list[str] | None = None) -> int:
     wo.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
     wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
     wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
+    wo.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
+    wo.add_argument(
+        "--auto-capture-dry-run",
+        action="store_true",
+        help="List pending auto-capture candidates without calling lab",
+    )
     wo.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wo.set_defaults(func=cmd_watch_once)
     wl = watch_sub.add_parser(
@@ -548,6 +615,8 @@ def main(argv: list[str] | None = None) -> int:
     wl.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
     wl.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
     wl.add_argument("--no-gate", action="store_true", help="Skip gate report")
+    wl.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
+    wl.add_argument("--auto-capture-dry-run", action="store_true", help="Dry-run auto capture only")
     wl.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wl.add_argument("--interval", type=float, default=2.0, help="Seconds between polls (default 2)")
     wl.add_argument("--debounce", type=float, default=1.0, help="Extra wait after a change batch (default 1)")
@@ -583,6 +652,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help='JSON of actual operating point for valid_range checks, e.g. \'{"vsupply_v":5.0,"temp_c":25}\'',
     )
+    gr.add_argument(
+        "--stress-sweep",
+        action="store_true",
+        help="Run profile stress_sweep before writing gate report",
+    )
+    gr.add_argument("--profile", default="default", help="sim_profiles.yaml block for stress_sweep")
     gr.set_defaults(func=cmd_gate_report)
 
     p_lab = sub.add_parser("lab", help="Instrument control: capture, read, query")
@@ -658,8 +733,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_design_arg(mb)
     mb.add_argument("--kicad-key", dest="kicad_key", required=True)
     mb.add_argument("--reference", default=None)
-    mb.add_argument("--provider", default="ltspice", choices=["ltspice", "datasheet", "bench"])
+    mb.add_argument("--provider", default="ltspice", choices=["ltspice", "datasheet", "bench", "vendor"])
     mb.add_argument("--from", dest="source_file", default=None, help="LTspice-exported .net/.cir (ltspice provider)")
+    mb.add_argument("--lib", default=None, help="Vendor/bench .lib path (vendor/bench provider)")
     mb.add_argument("--sim-name", dest="sim_name", default=None, help="Subckt/model name to emit")
     mb.add_argument("--mpn", default=None, help="MPN for datasheet provider (default: manifest value)")
     mb.add_argument(
@@ -708,6 +784,11 @@ def main(argv: list[str] | None = None) -> int:
     ac.add_argument("tool")
     ac.add_argument("--params", default="{}", help="JSON object")
     ac.set_defaults(func=cmd_agent_call)
+
+    p_mcp = sub.add_parser("mcp", help="Model Context Protocol server (stdio)")
+    mcp_sub = p_mcp.add_subparsers(dest="mcp_cmd", required=True)
+    msrv = mcp_sub.add_parser("serve", help="Run MCP server on stdio exposing agent tools")
+    msrv.set_defaults(func=cmd_mcp_serve)
 
     args = parser.parse_args(argv)
     try:

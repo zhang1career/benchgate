@@ -41,10 +41,11 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "reference": {"type": "string"},
                 "provider": {
                     "type": "string",
-                    "enum": ["ltspice", "datasheet", "bench"],
+                    "enum": ["ltspice", "datasheet", "bench", "vendor"],
                     "description": "Model source (default: ltspice)",
                 },
                 "source_file": {"type": "string", "description": "Path to .net/.cir netlist (ltspice)"},
+                "lib_path": {"type": "string", "description": "Path to vendor/bench .lib"},
                 "sim_name": {"type": "string", "description": "Subckt/model name to emit"},
                 "mpn": {"type": "string", "description": "MPN for datasheet provider"},
                 "from_meas": {
@@ -274,6 +275,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "object",
                     "description": "Actual operating point (e.g. {vsupply_v, temp_c, freq_hz}) checked against each model's valid_range",
                 },
+                "stress_sweep": {"type": "boolean", "description": "Run profile stress_sweep first"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block for stress_sweep"},
             },
             "required": ["design_dir"],
         },
@@ -304,6 +307,21 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
                 "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
                 "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
+                "run_auto_capture": {
+                    "type": "boolean",
+                    "description": "Trigger lab capture for pending subckt entries (default true)",
+                },
+                "auto_capture_dry_run": {"type": "boolean", "description": "List candidates only"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "sim_diagnose": {
+        "description": "Summarize simulation preflight/report/log into actionable diagnostics",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
             },
             "required": ["design_dir"],
         },
@@ -323,6 +341,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "run_pipeline": {"type": "boolean"},
                 "run_sim": {"type": "boolean"},
                 "run_gate": {"type": "boolean"},
+                "run_auto_capture": {"type": "boolean"},
+                "auto_capture_dry_run": {"type": "boolean"},
             },
             "required": ["design_dir"],
         },

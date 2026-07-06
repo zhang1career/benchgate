@@ -10,8 +10,10 @@ from pathlib import Path
 
 from benchgate.gate.report import load_sim_report_context, write_gate_report
 from benchgate.mapping.engine import mapping_status, sync_project
+from benchgate.paths import benchgate_paths
 from benchgate.pipeline.local_blocks import sync_local_blocks
 from benchgate.sim.pipeline import run_project_sim
+from benchgate.watch.auto_capture import run_auto_capture
 
 
 WATCH_GLOBS = ("*.kicad_sch", "*.kicad_pro", "*.kicad_pcb")
@@ -104,6 +106,8 @@ def watch_once(
     run_pipeline: bool = True,
     run_sim: bool = True,
     run_gate: bool = True,
+    run_auto_capture: bool = True,
+    auto_capture_dry_run: bool = False,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
     operating_point: dict = {}
@@ -133,6 +137,17 @@ def watch_once(
     )
     status = mapping_status(manifest)
     result["mapping_status"] = status
+
+    if run_auto_capture and status.get("pending"):
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
+        result["auto_capture"] = run_auto_capture(
+            design_dir,
+            manifest,
+            models_dir=models_dir,
+            lab_config=paths.lab_config,
+            instruments_config=paths.instruments,
+            dry_run=auto_capture_dry_run,
+        )
 
     sim_dir = reports_dir / "sim"
     stress_sweep_path: Path | None = None

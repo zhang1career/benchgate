@@ -8,6 +8,7 @@ from typing import Any
 from benchgate.providers.bench import BenchModelProvider
 from benchgate.providers.datasheet import DatasheetModelProvider
 from benchgate.providers.ltspice import LtspiceModelProvider
+from benchgate.providers.vendor import VendorModelProvider
 from benchgate.schemas import ComponentMapping, MeasuredParams
 
 
@@ -56,6 +57,16 @@ def create_model_provider(
             sim_pins=sim_pins,
             measured=measured,
             metrics=metrics or {},
+            valid_range=valid_range or {},
+            notes=notes,
+        )
+    if name == "vendor":
+        if not lib_path:
+            raise ValueError("vendor provider requires lib_path (--lib)")
+        return VendorModelProvider(
+            lib_path=lib_path,
+            sim_name=sim_name or "",
+            sim_pins=sim_pins,
             valid_range=valid_range or {},
             notes=notes,
         )

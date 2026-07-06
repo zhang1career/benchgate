@@ -110,6 +110,11 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         base_metrics = _resolve_provenance_dict(args, "metrics", existing.metrics if existing else None)
         metrics = merge_metrics(log_metrics, base_metrics)
         sim_name = args.get("sim_name") or args.get("mpn") or entry.metadata.get("value")
+        lib_path = None
+        if args.get("lib_path"):
+            lib_path = resolve_project_path(p.design, args["lib_path"], p.design)
+        elif provider_name in ("bench", "vendor") and args.get("source_file"):
+            lib_path = resolve_project_path(p.design, args["source_file"], p.design)
         provider = create_model_provider(
             provider_name,
             entry=entry,
@@ -117,9 +122,11 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             sim_name=sim_name,
             pins=pins,
             mpn=args.get("mpn"),
+            lib_path=lib_path,
             valid_range=valid_range,
             metrics=metrics,
             notes=args.get("notes"),
+            sim_pins=args.get("sim_pins"),
         )
         if args.get("reference"):
             entry.reference = args["reference"]
@@ -489,6 +496,20 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         sim_raw = Path(args["sim_raw_path"]) if args.get("sim_raw_path") else None
         if sim_raw and not sim_raw.is_absolute():
             sim_raw = resolve_project_path(p.design, sim_raw, p.reports / "sim" / "sim_waveform.csv")
+        stress_sweep_path: Path | None = None
+        if args.get("stress_sweep"):
+            from benchgate.sim.stress_sweep import run_stress_sweep
+
+            profile = str(args.get("profile", "default"))
+            sweep_dir = p.reports / "stress_sweep"
+            sweep_report = run_stress_sweep(
+                p.design,
+                mp,
+                sweep_dir,
+                sim_profile_path=p.sim_profile,
+                profile=profile,
+            )
+            stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
         report = write_gate_report(
             mp,
             out,
@@ -496,8 +517,15 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             sim_raw_path=sim_raw,
             operating_point=args.get("operating_point"),
             sim_report_path=p.reports / "sim" / "sim_report.json",
+            stress_sweep_path=stress_sweep_path,
         )
         return report.to_dict()
+
+    if name == "sim_diagnose":
+        p = _paths_for_design(args["design_dir"], args)
+        from benchgate.sim.diagnose import diagnose_sim
+
+        return diagnose_sim(p.reports)
 
     if name == "watch_once":
         p = _paths_for_design(args["design_dir"], args)
@@ -516,6 +544,8 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             run_pipeline=bool(args.get("run_pipeline", True)),
             run_sim=bool(args.get("run_sim", True)),
             run_gate=bool(args.get("run_gate", True)),
+            run_auto_capture=bool(args.get("run_auto_capture", True)),
+            auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
         )
 
     if name == "watch_loop":
@@ -540,6 +570,8 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             run_pipeline=bool(args.get("run_pipeline", True)),
             run_sim=bool(args.get("run_sim", True)),
             run_gate=bool(args.get("run_gate", True)),
+            run_auto_capture=bool(args.get("run_auto_capture", True)),
+            auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
             interval_s=float(args.get("interval_s", 2.0)),
             debounce_s=float(args.get("debounce_s", 1.0)),
             max_iterations=max_iter,

@@ -9,6 +9,7 @@ from pathlib import Path
 from benchgate.schemas import MappingManifest, SpiceModelKind
 
 _PLACEHOLDER_RE = re.compile(r"^(\S+)\s+__\1\b.*$", re.MULTILINE)
+_CONNECTOR_REF_RE = re.compile(r"^J\d+$", re.I)
 _DROPPED_RE = re.compile(
     r"^\* benchgate: dropped unmodeled placeholder '(?P<line>.*)'",
     re.MULTILINE,
@@ -80,12 +81,18 @@ def run_preflight(
                 )
             )
         else:
+            lib_id = str((entry.metadata or {}).get("lib_id") or "") if entry else ""
+            is_connector = bool(_CONNECTOR_REF_RE.match(ref)) or lib_id.startswith("Connector:")
             issues.append(
                 PreflightIssue(
-                    severity="warning",
-                    code="unmodeled_placeholder",
+                    severity="info" if is_connector else "warning",
+                    code="connector_dropped" if is_connector else "unmodeled_placeholder",
                     reference=ref,
-                    message=f"{ref} has no SPICE model and will be dropped from simulation",
+                    message=(
+                        f"{ref} is a connector (no SPICE model); dropped from simulation"
+                        if is_connector
+                        else f"{ref} has no SPICE model and will be dropped from simulation"
+                    ),
                 )
             )
 
