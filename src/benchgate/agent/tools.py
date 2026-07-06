@@ -39,15 +39,24 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
                 "kicad_key": {"type": "string"},
                 "reference": {"type": "string"},
-                "provider": {"type": "string", "enum": ["ltspice"], "description": "Model source (default: ltspice)"},
-                "source_file": {"type": "string", "description": "Path to .net/.cir netlist"},
-                "sim_name": {"type": "string", "description": "Subckt name to emit"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["ltspice", "datasheet", "bench"],
+                    "description": "Model source (default: ltspice)",
+                },
+                "source_file": {"type": "string", "description": "Path to .net/.cir netlist (ltspice)"},
+                "sim_name": {"type": "string", "description": "Subckt/model name to emit"},
+                "mpn": {"type": "string", "description": "MPN for datasheet provider"},
+                "from_meas": {
+                    "type": "string",
+                    "description": "Path to LTspice/ngspice .MEAS log; parsed into provenance.metrics",
+                },
                 "pins": {"type": "string", "description": "External pins (space-separated); required to wrap a flat netlist"},
                 "valid_range": {"type": "object", "description": "Operating-range assumptions (ports/freq/temp/bias)"},
                 "metrics": {"type": "object", "description": "Achieved performance metrics {name: value} from the local sim"},
                 "notes": {"type": "string"},
             },
-            "required": ["design_dir", "kicad_key", "source_file", "sim_name"],
+            "required": ["design_dir", "kicad_key"],
         },
     },
     "spec_set": {
@@ -196,8 +205,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_dir": {"type": "string"},
                 "profile": {"type": "string"},
+                "fail_on_preflight": {
+                    "type": "boolean",
+                    "description": "Abort before ngspice when preflight reports errors",
+                },
             },
             "required": ["design_dir"],
+        },
+    },
+    "sim_stress_sweep": {
+        "description": "Run profile stress_sweep grid and aggregate worst-case component stress",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "profile": {"type": "string"},
+            },
+            "required": ["design_dir", "profile"],
         },
     },
     "sim_sweep": {
@@ -274,9 +300,29 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block (default default)"},
                 "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
                 "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
                 "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "watch_loop": {
+        "description": (
+            "Continuous watch: poll KiCad + blocks.yaml; on change run pipeline → mapping → sim → gate"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "profile": {"type": "string"},
+                "interval_s": {"type": "number", "description": "Poll interval seconds (default 2)"},
+                "debounce_s": {"type": "number", "description": "Wait after change before next poll (default 1)"},
+                "max_iterations": {"type": "integer", "description": "Stop after N polls (0 = until interrupted)"},
+                "run_pipeline": {"type": "boolean"},
+                "run_sim": {"type": "boolean"},
+                "run_gate": {"type": "boolean"},
             },
             "required": ["design_dir"],
         },

@@ -12,20 +12,21 @@
 
 ## Agent 自动化
 
-- [ ] **`watch loop`** — 持续监听 `design/` + `models/blocks.yaml` / `blocks/*`，变更时自动跑 `watch_once`（pipeline → mapping → sim → gate）；CLI `benchgate watch loop`，Agent `watch_loop`；可选 `--interval`、debounce、Git hook 集成
+- [x] **`watch loop`** — 持续监听 `design/` + `models/blocks.yaml` / `blocks/*`，变更时自动跑 `watch_once`；CLI `benchgate watch loop`，Agent `watch_loop`
 - [ ] **`auto_capture`** — watch 检测到 pending 元件时自动触发 `lab capture`（MINIMUM_SCOPE 旧描述曾提及，未实现）
 
 ---
 
 ## RFC 代码缺口（文档已写、实现未齐）
 
-- [ ] **`BenchModelProvider`** — `providers/bench.py`：包裹现有 `lab/fit` + `apply_measured_model`，与 `LtspiceModelProvider` 同形（RFC §2、§4）
-- [ ] **`mapping/engine.build_model()`** — 统一 `provider.build()` → `register_model()` 收口；`apply_measured_model` 改为 BenchModelProvider 薄封装（RFC §2.3、§4）
-- [ ] **`--from-meas`** — CLI `model build --from-meas block.log`：解析 LTspice/ngspice `.MEAS` 日志 → `provenance.metrics`（RFC §10.5，M7 延后）
-- [ ] **`sim-ltspice` optional extra** — `pyproject.toml` 增加 `sim-ltspice = ["spicelib>=1.6"]`，与 `lab` / `agent` / `dev` 并列（RFC §5.2）
-- [ ] **`operating_point` 自动推断** — 从 `sim_profiles.yaml` 或 sim 结果推断工作点，供 gate `valid_range` 校验（RFC §3.2，现仅 CLI / `blocks.yaml` 显式传入）
-- [ ] **LTspice 方言归一化补全** — `.step`、加密 LT/ADI 模型明确报错、未覆盖原语显式 fail（RFC §5.3）
-- [ ] **Vendor / Datasheet Provider** — `ModelSource.VENDOR` / `DATASHEET` 的 `ModelProvider` 实现（RFC §2.1 枚举，无实现）
+- [x] **`BenchModelProvider`** — `providers/bench.py` + `apply_measured_model` → `build_model()`
+- [x] **`mapping/engine.build_model()`** — 统一 `provider.build()` → `register_model()` 收口
+- [x] **`DatasheetModelProvider`** — `providers/datasheet.py` + `config/datasheet_models.yaml` + `ensure_datasheet_models()` on mapping sync
+- [x] **`--from-meas`** — CLI `model build --from-meas block.log` + pipeline `metrics_file: *.log`
+- [x] **`sim-ltspice` optional extra** — `pip install benchgate[sim-ltspice]` → `spicelib>=1.6`（`.asc` 直采，可选）
+- [x] **`operating_point` 自动推断** — `sim/profile.infer_operating_point` + `operating_point_infer` in sim_profiles
+- [x] **应力签核** — `stress` block, limits catalog, Ic/Pd/Tj probes, `sim stress-sweep`
+- [ ] **Vendor Provider** — `ModelSource.VENDOR` 直接引用厂商 `.lib`（DATASHEET 已由 DatasheetModelProvider 实现）
 
 ---
 

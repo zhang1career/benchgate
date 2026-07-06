@@ -102,10 +102,45 @@ def cmd_sim_run(args: argparse.Namespace) -> int:
             "manifest_path": str(p.manifest),
             "output_dir": str(out_dir),
             "profile": args.profile,
+            "fail_on_preflight": args.fail_on_preflight,
         },
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result.get("success") else 1
+
+
+def cmd_sim_preflight(args: argparse.Namespace) -> int:
+    from benchgate.sim.pipeline import run_preflight_only
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "sim")
+    report = run_preflight_only(
+        p.design,
+        p.manifest,
+        out_dir,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0 if report.get("passed") else 1
+
+
+def cmd_sim_stress_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.stress_sweep import run_stress_sweep
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "stress_sweep")
+    report = run_stress_sweep(
+        p.design,
+        p.manifest,
+        out_dir,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+    )
+    payload = report.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    worst = payload.get("worst") or {}
+    return 0 if worst.get("passed", False) else 1
 
 
 def cmd_sim_sweep(args: argparse.Namespace) -> int:
@@ -156,12 +191,46 @@ def cmd_sim_cosim(args: argparse.Namespace) -> int:
 
 
 def cmd_watch_once(args: argparse.Namespace) -> int:
-    params: dict = {"design_dir": args.design, "run_sim": not args.no_sim}
+    params: dict = {
+        "design_dir": args.design,
+        "run_sim": not args.no_sim,
+        "profile": args.profile,
+    }
     if args.no_pipeline:
         params["run_pipeline"] = False
     if args.no_gate:
         params["run_gate"] = False
     result = dispatch("watch_once", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_watch_loop(args: argparse.Namespace) -> int:
+    from benchgate.paths import benchgate_paths
+    from benchgate.watch.loop import watch_loop
+
+    p = benchgate_paths(args.design)
+    state_path = p.state
+    max_iter = args.max_iterations if args.max_iterations > 0 else None
+    result = watch_loop(
+        p.design,
+        manifest_path=p.manifest,
+        models_dir=p.models,
+        reports_dir=p.reports,
+        state_path=state_path,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+        subckt_dir=p.subckt,
+        global_models_dir=p.global_models,
+        blocks_yaml=p.blocks_yaml,
+        tmp_dir=p.tmp_root / "pipeline",
+        run_pipeline=not args.no_pipeline,
+        run_sim=not args.no_sim,
+        run_gate=not args.no_gate,
+        interval_s=args.interval,
+        debounce_s=args.debounce,
+        max_iterations=max_iter,
+    )
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -324,9 +393,15 @@ def cmd_model_build(args: argparse.Namespace) -> int:
         "design_dir": args.design,
         "kicad_key": args.kicad_key,
         "provider": args.provider,
-        "source_file": args.source_file,
-        "sim_name": args.sim_name,
     }
+    if args.source_file:
+        params["source_file"] = args.source_file
+    if args.sim_name:
+        params["sim_name"] = args.sim_name
+    if args.mpn:
+        params["mpn"] = args.mpn
+    if args.from_meas:
+        params["from_meas"] = args.from_meas
     if args.reference:
         params["reference"] = args.reference
     if args.pins:
@@ -406,7 +481,30 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     sr.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
     sr.add_argument("--profile", default="default")
+    sr.add_argument(
+        "--fail-on-preflight",
+        action="store_true",
+        help="Abort before ngspice when preflight reports errors",
+    )
     sr.set_defaults(func=cmd_sim_run)
+    spf = sim_sub.add_parser(
+        "preflight",
+        help="Export/prepare netlist and run preflight checks without ngspice",
+    )
+    _add_design_arg(spf)
+    spf.add_argument("--manifest", default=None, help="Override manifest path")
+    spf.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
+    spf.add_argument("--profile", default="default")
+    spf.set_defaults(func=cmd_sim_preflight)
+    ssw = sim_sub.add_parser(
+        "stress-sweep",
+        help="Sweep profile stress_sweep axes and aggregate worst-case component stress",
+    )
+    _add_design_arg(ssw)
+    ssw.add_argument("--manifest", default=None, help="Override manifest path")
+    ssw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/stress_sweep)")
+    ssw.add_argument("--profile", default="default")
+    ssw.set_defaults(func=cmd_sim_stress_sweep)
     sw = sim_sub.add_parser(
         "sweep",
         help="Run a profile over a grid of param/component overrides; collect one metric per point",
@@ -440,7 +538,26 @@ def main(argv: list[str] | None = None) -> int:
     wo.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
     wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
     wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
+    wo.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wo.set_defaults(func=cmd_watch_once)
+    wl = watch_sub.add_parser(
+        "loop",
+        help="Continuously watch KiCad/blocks changes and run watch_once pipeline",
+    )
+    _add_design_arg(wl)
+    wl.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
+    wl.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
+    wl.add_argument("--no-gate", action="store_true", help="Skip gate report")
+    wl.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
+    wl.add_argument("--interval", type=float, default=2.0, help="Seconds between polls (default 2)")
+    wl.add_argument("--debounce", type=float, default=1.0, help="Extra wait after a change batch (default 1)")
+    wl.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Stop after N polls (0 = run until interrupted)",
+    )
+    wl.set_defaults(func=cmd_watch_loop)
 
     p_pipeline = sub.add_parser("pipeline", help="Agent automation from models/blocks.yaml")
     pipeline_sub = p_pipeline.add_subparsers(dest="pipeline_cmd", required=True)
@@ -537,14 +654,21 @@ def main(argv: list[str] | None = None) -> int:
 
     p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
     model_sub = p_model.add_subparsers(dest="model_cmd", required=True)
-    mb = model_sub.add_parser("build", help="Build an ngspice subckt from a .net/.cir and register it")
+    mb = model_sub.add_parser("build", help="Build an ngspice model from a provider source and register it")
     _add_design_arg(mb)
     mb.add_argument("--kicad-key", dest="kicad_key", required=True)
     mb.add_argument("--reference", default=None)
-    mb.add_argument("--provider", default="ltspice", choices=["ltspice"])
-    mb.add_argument("--from", dest="source_file", required=True, help="LTspice-exported .net/.cir netlist")
-    mb.add_argument("--sim-name", dest="sim_name", required=True, help="Subckt name to emit")
-    mb.add_argument("--pins", default=None, help="External pins, space-separated (required to wrap a flat netlist)")
+    mb.add_argument("--provider", default="ltspice", choices=["ltspice", "datasheet", "bench"])
+    mb.add_argument("--from", dest="source_file", default=None, help="LTspice-exported .net/.cir (ltspice provider)")
+    mb.add_argument("--sim-name", dest="sim_name", default=None, help="Subckt/model name to emit")
+    mb.add_argument("--mpn", default=None, help="MPN for datasheet provider (default: manifest value)")
+    mb.add_argument(
+        "--from-meas",
+        dest="from_meas",
+        default=None,
+        help="Parse LTspice/ngspice .MEAS log into provenance.metrics (merged with --metrics)",
+    )
+    mb.add_argument("--pins", default=None, help="External pins, space-separated (ltspice flat netlist wrap)")
     mb.add_argument(
         "--valid-range",
         dest="valid_range",

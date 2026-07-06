@@ -209,3 +209,30 @@ def test_spec_set_and_metrics_close_loop(tmp_path, monkeypatch):
     report = build_gate_report(manifest, captured_dir=design / "models" / "captured")
     assert report.entries[0].spec_status == "fail"
     assert report.summary["spec_failures"] == 1
+
+
+def test_model_build_from_meas_log(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    design = tmp_path / "design"
+    design.mkdir()
+    monkeypatch.setenv("BENCHGATE_HOME", str(home))
+    (design / "block.net").write_text(SUBCKT_NET, encoding="utf-8")
+    (design / "block.log").write_text(
+        "Measurement: eff_pct\n     eff_pct: PARAM=92.5\n",
+        encoding="utf-8",
+    )
+    key = "Sim:X::RCLP"
+    result = dispatch(
+        "model_build",
+        {
+            "design_dir": str(design),
+            "kicad_key": key,
+            "source_file": "block.net",
+            "sim_name": "RCLP",
+            "from_meas": "block.log",
+        },
+    )
+    assert result["metrics"]["eff_pct"] == 92.5
+    manifest = load_manifest(design / "models" / "manifest.yaml", global_models_dir=home / "models")
+    assert manifest.find(key).provenance.metrics["eff_pct"] == 92.5
+

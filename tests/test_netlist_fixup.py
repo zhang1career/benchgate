@@ -1,9 +1,12 @@
 """Tests for gate-drive netlist rewrite."""
 
+from benchgate.schemas import ComponentMapping, MappingManifest, SpiceModelKind
 from benchgate.sim.netlist import (
     _fix_zero_ohm_links,
+    fix_device_pin_order,
     format_rload,
     inject_isense_path,
+    inject_save_directives,
     split_gate_drive_nets,
 )
 
@@ -64,6 +67,33 @@ def test_fix_zero_ohm_links() -> None:
     out = _fix_zero_ohm_links(netlist)
     assert "R5 Net-_C2-Pad1_ Net-_U1-THRES_ 1m" in out
     assert "R6 Net-_C2-Pad1_ Net-_U1-TRIG_ 1m" in out
+
+
+def test_fix_bjt_pin_order() -> None:
+    netlist = "Q1 Net-_Q1-B_ Net-_Q1-E_ +12V SS8050\n"
+    manifest = MappingManifest(
+        entries=[
+            ComponentMapping(
+                kicad_key="Transistor_BJT:SS8050::SS8050",
+                reference="Q1",
+                spice_kind=SpiceModelKind.SUBCKT,
+                sim_pins="1=B 2=E 3=C",
+            )
+        ]
+    )
+    out = fix_device_pin_order(netlist, manifest)
+    assert "Q1 +12V Net-_Q1-B_ Net-_Q1-E_ SS8050" in out
+    assert "BJT pin order fixed" in out
+
+
+def test_inject_save_directives() -> None:
+    netlist = ".control\ntran 1u 10m\nrun\nwrite sim.raw all\n.endc\n.end\n"
+    out = inject_save_directives(netlist, ["@q1[c]", "v(out)"])
+    assert ".save all @q1[ic]" in out
+    assert "save v(out)" in out
+    assert "write sim.raw all" in out
+    assert "write sim.raw all @q1" not in out
+    assert out.index(".save") < out.index(".control")
 
 
 def test_fix_ams1117_pin_order() -> None:

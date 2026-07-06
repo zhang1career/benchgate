@@ -11,6 +11,9 @@ See docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md.
 from __future__ import annotations
 
 from benchgate.providers.base import ModelProvider, register_model
+from benchgate.providers.bench import BenchModelProvider
+from benchgate.providers.datasheet import DatasheetModelProvider
+from benchgate.providers.factory import create_model_provider
 from benchgate.providers.ltspice import (
     LtspiceModelProvider,
     netlist_to_subckt,
@@ -20,6 +23,9 @@ from benchgate.providers.ltspice import (
 __all__ = [
     "ModelProvider",
     "register_model",
+    "BenchModelProvider",
+    "DatasheetModelProvider",
+    "create_model_provider",
     "LtspiceModelProvider",
     "netlist_to_subckt",
     "normalize_ltspice_netlist",

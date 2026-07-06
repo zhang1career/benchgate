@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 lab = ["pyvisa>=1.14", "pyvisa-py>=0.7", "pyserial>=3.5"]
+sim-ltspice = ["spicelib>=1.6"]
 agent = ["mcp>=1.0"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 

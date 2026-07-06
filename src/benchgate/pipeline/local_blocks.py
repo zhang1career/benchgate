@@ -40,6 +40,8 @@ def _parse_pins(raw: str | list[str] | None) -> list[str] | None:
 
 
 def _load_metrics(block: dict[str, Any], models_dir: Path) -> dict[str, float]:
+    from benchgate.providers.meas_log import merge_metrics, parse_meas_file
+
     metrics: dict[str, float] = {}
     inline = block.get("metrics")
     if isinstance(inline, dict):
@@ -49,10 +51,13 @@ def _load_metrics(block: dict[str, Any], models_dir: Path) -> dict[str, float]:
         path = models_dir / metrics_file
         if not path.is_file():
             raise FileNotFoundError(f"metrics_file not found: {path}")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"metrics_file must be a JSON object: {path}")
-        metrics.update({k: float(v) for k, v in data.items()})
+        if path.suffix.lower() in {".log", ".meas", ".txt"}:
+            metrics = merge_metrics(metrics, parse_meas_file(path))
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError(f"metrics_file must be a JSON object: {path}")
+            metrics.update({k: float(v) for k, v in data.items()})
     return metrics
 
 

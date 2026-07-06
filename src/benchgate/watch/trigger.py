@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from benchgate.gate.report import write_gate_report
+from benchgate.gate.report import load_sim_report_context, write_gate_report
 from benchgate.mapping.engine import mapping_status, sync_project
 from benchgate.pipeline.local_blocks import sync_local_blocks
 from benchgate.sim.pipeline import run_project_sim
@@ -96,6 +96,7 @@ def watch_once(
     reports_dir: Path,
     state_path: Path,
     sim_profile_path: Path | None = None,
+    profile: str = "default",
     subckt_dir: Path,
     global_models_dir: Path,
     blocks_yaml: Path | None = None,
@@ -134,25 +135,52 @@ def watch_once(
     result["mapping_status"] = status
 
     sim_dir = reports_dir / "sim"
+    stress_sweep_path: Path | None = None
     if run_sim and not status.get("unmapped"):
         report, _ = run_project_sim(
             design_dir,
             manifest_path,
             sim_dir,
             sim_profile_path=sim_profile_path,
+            profile=profile,
         )
         result["sim"] = report.to_dict()
 
+        if sim_profile_path:
+            from benchgate.sim.profile import load_profile_block
+            from benchgate.sim.stress_sweep import run_stress_sweep
+
+            block = load_profile_block(sim_profile_path, profile)
+            if block.get("stress_sweep") and block.get("stress"):
+                sweep_dir = reports_dir / "stress_sweep"
+                sweep_report = run_stress_sweep(
+                    design_dir,
+                    manifest_path,
+                    sweep_dir,
+                    sim_profile_path=sim_profile_path,
+                    profile=profile,
+                )
+                result["stress_sweep"] = sweep_report.to_dict()
+                stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
+
     if run_gate:
         gate_path = reports_dir / "gate_report.json"
+        sim_report = sim_dir / "sim_report.json"
+        op = operating_point or None
+        if sim_report.exists():
+            inferred_op, _ = load_sim_report_context(sim_report)
+            if inferred_op and not op:
+                op = inferred_op
         gate = write_gate_report(
             manifest_path,
             gate_path,
             captured_dir=models_dir / "captured",
             sim_raw_path=sim_dir / "sim_waveform.csv" if sim_dir.exists() else None,
-            operating_point=operating_point or None,
+            operating_point=op,
+            sim_report_path=sim_report if sim_report.exists() else None,
+            stress_sweep_path=stress_sweep_path,
         )
         result["gate"] = gate.to_dict()
-        result["operating_point"] = operating_point
+        result["operating_point"] = op
 
     return result

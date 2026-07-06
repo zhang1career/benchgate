@@ -74,6 +74,48 @@ def test_evaluate_checks_pass_and_fail(tmp_path: Path) -> None:
     assert np.isclose(ripple.checks[0].value, 1.2)
 
 
+def test_evaluate_expression_check(tmp_path: Path) -> None:
+    time = np.linspace(0, 1e-3, 100)
+    v_hi = np.full(100, 12.0)
+    v_lo = np.concatenate([np.zeros(50), np.full(50, 3.0)])
+    header = (
+        "Title: test\nPlotname: Transient Analysis\nFlags: real\n"
+        "No. Variables: 3\nNo. Points: 100\nVariables:\n"
+        "\t0\ttime\ttime\n"
+        "\t1\tv(+12v)\tvoltage\n"
+        "\t2\tv(emit)\tvoltage\n"
+        "Binary:\n"
+    )
+    matrix = np.column_stack([time, v_hi, v_lo]).astype("<f8")
+    raw = tmp_path / "sim.raw"
+    raw.write_bytes(header.encode("latin-1") + matrix.tobytes())
+    _, signals = parse_ngspice_raw(raw)
+
+    report = evaluate_checks(
+        time,
+        signals,
+        [
+            {
+                "expr": "v(+12v) - v(emit)",
+                "window_after": "0.5ms",
+                "metric": "max",
+                "gte": 8.0,
+            }
+        ],
+    )
+    assert report.passed is True
+    assert np.isclose(report.checks[0].value, 9.0)
+
+
+def test_resolve_branch_current_alias() -> None:
+    from benchgate.sim.analysis import _resolve_signal
+
+    signals = {"@q1[c]": np.array([0.01, 0.02, 0.03])}
+    series = _resolve_signal(signals, "i(q1)")
+    assert series is not None
+    assert np.isclose(series[-1], 0.03)
+
+
 def test_evaluate_adc_signal_names(tmp_path: Path) -> None:
     time = np.linspace(0, 5e-3, 100)
     adc_vin = np.full(100, 1.08)
