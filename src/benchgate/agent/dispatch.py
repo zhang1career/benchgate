@@ -388,6 +388,35 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             "stderr": result.stderr,
         }
 
+    if name == "sim_sweep":
+        from benchgate.sim.sweep import run_sweep
+
+        p = _paths_for_design(args["design_dir"], args)
+        mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
+        if not mp.is_absolute():
+            mp = resolve_project_path(p.design, mp, p.manifest)
+        out_dir = Path(args["output_dir"]) if args.get("output_dir") else p.reports / "sim_sweep"
+        if args.get("output_dir") and not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "sim_sweep")
+        elif not args.get("output_dir"):
+            out_dir = p.reports / "sim_sweep"
+        def norm(d: dict | None) -> dict[str, list[str]]:
+            return {k: [str(x) for x in v] for k, v in (d or {}).items()}
+
+        report = run_sweep(
+            p.design,
+            mp,
+            out_dir,
+            sim_profile_path=p.sim_profile,
+            profile=args.get("profile", "default"),
+            metric_spec=args["metric"],
+            params=norm(args.get("params")),
+            sets=norm(args.get("sets")),
+            pass_gte=args.get("pass_gte"),
+            pass_lte=args.get("pass_lte"),
+        )
+        return {"success": True, "report": report.to_dict()}
+
     if name == "sim_cosim":
         from benchgate.cosim.runner import run_cosim
 

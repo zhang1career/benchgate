@@ -108,6 +108,37 @@ def cmd_sim_run(args: argparse.Namespace) -> int:
     return 0 if result.get("success") else 1
 
 
+def cmd_sim_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.sweep import parse_axis
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_sweep")
+    params: dict[str, list[str]] = {}
+    sets: dict[str, list[str]] = {}
+    for spec in args.param or []:
+        name, values = parse_axis(spec)
+        params[name] = values
+    for spec in args.set or []:
+        name, values = parse_axis(spec)
+        sets[name] = values
+    call_args: dict = {
+        "design_dir": str(p.design),
+        "manifest_path": str(p.manifest),
+        "output_dir": str(out_dir),
+        "profile": args.profile,
+        "metric": args.metric,
+        "params": params,
+        "sets": sets,
+    }
+    if args.pass_gte is not None:
+        call_args["pass_gte"] = args.pass_gte
+    if args.pass_lte is not None:
+        call_args["pass_lte"] = args.pass_lte
+    result = dispatch("sim_sweep", call_args)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_sim_cosim(args: argparse.Namespace) -> int:
     p = _paths(args)
     out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_cosim")
@@ -376,6 +407,20 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
     sr.add_argument("--profile", default="default")
     sr.set_defaults(func=cmd_sim_run)
+    sw = sim_sub.add_parser(
+        "sweep",
+        help="Run a profile over a grid of param/component overrides; collect one metric per point",
+    )
+    _add_design_arg(sw)
+    sw.add_argument("--manifest", default=None, help="Override manifest path")
+    sw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_sweep)")
+    sw.add_argument("--profile", default="default")
+    sw.add_argument("--metric", required=True, help="signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u'")
+    sw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
+    sw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
+    sw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
+    sw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
+    sw.set_defaults(func=cmd_sim_sweep)
     sc = sim_sub.add_parser("cosim", help="Closed-loop cosim with firmware control.c")
     _add_design_arg(sc)
     sc.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")

@@ -200,6 +200,28 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "sim_sweep": {
+        "description": (
+            "Run a sim profile over a grid of overrides and collect one metric per point. "
+            "Axes: params (override .param NAME) and sets (override an element value, e.g. R11). "
+            "Metric spec is 'signal[:metric[:window_after]]' (metric: min/max/avg/rms/pp/final)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "profile": {"type": "string"},
+                "metric": {"type": "string", "description": "e.g. 'v(n_hdr):min:250u'"},
+                "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
+                "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
+                "pass_gte": {"type": "number", "description": "Mark point passed if metric >= this"},
+                "pass_lte": {"type": "number", "description": "Mark point passed if metric <= this"},
+            },
+            "required": ["design_dir", "profile", "metric"],
+        },
+    },
     "sim_cosim": {
         "description": "Closed-loop cosim: compile firmware control.c, segment ngspice, validate",
         "parameters": {

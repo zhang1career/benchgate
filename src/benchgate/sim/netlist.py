@@ -22,6 +22,16 @@ def _fix_ams1117_pins(text: str) -> str:
     )
 
 
+def _fix_zero_ohm_links(text: str) -> str:
+    """Replace 0 Ω schematic jumpers with 1 mΩ so ngspice avoids 1e-12 Ω warnings."""
+    return re.sub(
+        r"^(R\d+\s+\S+\s+\S+)\s+0\s*$",
+        r"\1 1m",
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 def _name_refresh_bus(text: str) -> str:
     """D2/D3 + R95/R96 share an unnamed net; label it BST_REF (HS refresh, not bootstrap charge)."""
     replacements = [
@@ -66,6 +76,20 @@ def _split_legacy_merged_drivers(text: str) -> str:
     for old, new in replacements:
         text = text.replace(old, new)
     return text
+
+
+_PLACEHOLDER_RE = re.compile(r"^(\S+)\s+__\1\b.*$", re.MULTILINE)
+
+
+def strip_unmodeled_placeholders(netlist_text: str) -> str:
+    """Comment out KiCad placeholder elements for symbols without a SPICE model.
+
+    KiCad exports a symbol that has no simulation model (connectors, test points,
+    mounting holes, …) as a bare ``REF __REF`` line. ngspice then tries to parse it
+    as a device (e.g. ``J3`` → JFET) and aborts with 'Unable to find definition of
+    model'. These parts are not part of the electrical model, so neutralize them.
+    """
+    return _PLACEHOLDER_RE.sub(r"* benchgate: dropped unmodeled placeholder '\g<0>'", netlist_text)
 
 
 def split_gate_drive_nets(netlist_text: str) -> str:
@@ -161,6 +185,30 @@ def build_include_block(manifest: MappingManifest) -> str:
     return "\n".join(lines) + "\n"
 
 
+def load_profile_excludes(config_path: Path, profile: str = "default") -> list[str]:
+    """Read a profile's ``exclude`` list: regexes of netlist lines to drop before sim."""
+    if not config_path.exists():
+        return []
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    block = data.get(profile) or {}
+    patterns = block.get("exclude", [])
+    return [str(p) for p in patterns] if patterns else []
+
+
+def strip_excluded_lines(netlist_text: str, patterns: list[str]) -> str:
+    """Comment out element lines matching any exclude regex (e.g. isolate one block)."""
+    if not patterns:
+        return netlist_text
+    regexes = [re.compile(p) for p in patterns]
+    out: list[str] = []
+    for line in netlist_text.splitlines():
+        if line and not line.startswith("*") and any(r.search(line) for r in regexes):
+            out.append("* benchgate: excluded -> " + line)
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
 def load_sim_profile(config_path: Path, profile: str = "default") -> str:
     if not config_path.exists():
         return ""
@@ -211,6 +259,10 @@ def prepare_netlist(
     profile: str = "default",
 ) -> Path:
     text = netlist_path.read_text(encoding="utf-8", errors="replace")
+    text = strip_unmodeled_placeholders(text)
+    text = _fix_zero_ohm_links(text)
+    if sim_profile_path:
+        text = strip_excluded_lines(text, load_profile_excludes(sim_profile_path, profile))
     text = split_gate_drive_nets(text)
     manifest = load_manifest(manifest_path)
     text = inject_models(text, manifest, sim_profile_path=sim_profile_path, profile=profile)
