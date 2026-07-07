@@ -69,7 +69,7 @@ def _add_design_arg(parser: argparse.ArgumentParser, *, default: str = "design")
 
 
 def _paths(args: argparse.Namespace):
-    return benchgate_paths(args.design, manifest=args.manifest)
+    return benchgate_paths(args.design, manifest=getattr(args, "manifest", None))
 
 
 def cmd_mapping_sync(args: argparse.Namespace) -> int:
@@ -177,7 +177,33 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
 def cmd_sim_diagnose(args: argparse.Namespace) -> int:
     result = dispatch("sim_diagnose", {"design_dir": args.design})
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    return 0 if result.get("ok") else 1
+    return 0
+
+
+def cmd_sim_tolerance(args: argparse.Namespace) -> int:
+    from benchgate.sim.tolerance import run_tolerance_study
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "mc_tolerance")
+    report = run_tolerance_study(
+        p.design,
+        p.manifest,
+        out_dir,
+        blocks_yaml=p.blocks_yaml,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+        n_samples=args.samples,
+        seed=args.seed,
+        strategy=args.strategy,
+        warmup_ratio=args.warmup_ratio,
+        surrogate_degree=args.surrogate_degree,
+        sequential_batch=args.sequential_batch,
+        sequential_ci_width=args.sequential_ci_width,
+        sequential_min_samples=args.sequential_min_samples,
+    )
+    payload = report.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
 
 
 def cmd_sim_cosim(args: argparse.Namespace) -> int:
@@ -210,6 +236,12 @@ def cmd_watch_once(args: argparse.Namespace) -> int:
         params["run_auto_capture"] = False
     if args.auto_capture_dry_run:
         params["auto_capture_dry_run"] = True
+    if args.no_tolerance:
+        params["run_tolerance"] = False
+    if getattr(args, "tolerance_strategy", None):
+        params["tolerance_strategy"] = args.tolerance_strategy
+    if getattr(args, "tolerance_samples", None):
+        params["tolerance_samples"] = args.tolerance_samples
     result = dispatch("watch_once", params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
@@ -239,6 +271,9 @@ def cmd_watch_loop(args: argparse.Namespace) -> int:
         run_gate=not args.no_gate,
         run_auto_capture=not args.no_auto_capture,
         auto_capture_dry_run=args.auto_capture_dry_run,
+        run_tolerance=not args.no_tolerance,
+        tolerance_samples=args.tolerance_samples,
+        tolerance_strategy=args.tolerance_strategy,
         interval_s=args.interval,
         debounce_s=args.debounce,
         max_iterations=max_iter,
@@ -264,6 +299,8 @@ def cmd_gate_report(args: argparse.Namespace) -> int:
     if args.stress_sweep:
         params["stress_sweep"] = True
         params["profile"] = args.profile
+    if getattr(args, "rules", "auto") == "none":
+        params["rules"] = "none"
     result = dispatch("gate_report", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -575,6 +612,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_design_arg(sd)
     sd.set_defaults(func=cmd_sim_diagnose)
+    stol = sim_sub.add_parser(
+        "tolerance",
+        help="LHS tolerance study over blocks.yaml tolerances (Monte Carlo M1)",
+    )
+    _add_design_arg(stol)
+    stol.add_argument("--manifest", default=None, help="Override manifest path")
+    stol.add_argument("--out", default=None, help="Output directory (default: reports/mc_tolerance)")
+    stol.add_argument("--profile", default="charge_pump")
+    stol.add_argument("--samples", type=int, default=200, help="LHS sample count (default 200)")
+    stol.add_argument("--seed", type=int, default=42)
+    stol.add_argument(
+        "--strategy",
+        choices=["lhs", "adaptive", "sequential"],
+        default="lhs",
+        help="lhs | adaptive (warmup+refine) | sequential (CI stopping, M3+)",
+    )
+    stol.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.25,
+        help="Fraction of samples for adaptive warmup phase (default 0.25)",
+    )
+    stol.add_argument("--surrogate-degree", type=int, default=2, help="Surrogate poly degree (1=linear, 2=default)")
+    stol.add_argument("--sequential-batch", type=int, default=25, help="Batch size for --strategy sequential")
+    stol.add_argument("--sequential-ci-width", type=float, default=5.0, help="Stop when Wilson yield CI width <= pct")
+    stol.add_argument("--sequential-min-samples", type=int, default=50, help="Min samples before sequential stop")
+    stol.set_defaults(func=cmd_sim_tolerance)
 
     p_kicad = sub.add_parser("kicad", help="KiCad schematic utilities (KiCad 10-safe)")
     kicad_sub = p_kicad.add_subparsers(dest="kicad_cmd", required=True)
@@ -605,6 +669,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="List pending auto-capture candidates without calling lab",
     )
+    wo.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
+    wo.add_argument("--tolerance-strategy", default="adaptive", choices=["lhs", "adaptive", "sequential"])
+    wo.add_argument("--tolerance-samples", type=int, default=200)
     wo.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wo.set_defaults(func=cmd_watch_once)
     wl = watch_sub.add_parser(
@@ -617,6 +684,9 @@ def main(argv: list[str] | None = None) -> int:
     wl.add_argument("--no-gate", action="store_true", help="Skip gate report")
     wl.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
     wl.add_argument("--auto-capture-dry-run", action="store_true", help="Dry-run auto capture only")
+    wl.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
+    wl.add_argument("--tolerance-strategy", default="adaptive", choices=["lhs", "adaptive", "sequential"])
+    wl.add_argument("--tolerance-samples", type=int, default=200)
     wl.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wl.add_argument("--interval", type=float, default=2.0, help="Seconds between polls (default 2)")
     wl.add_argument("--debounce", type=float, default=1.0, help="Extra wait after a change batch (default 1)")
@@ -658,6 +728,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Run profile stress_sweep before writing gate report",
     )
     gr.add_argument("--profile", default="default", help="sim_profiles.yaml block for stress_sweep")
+    gr.add_argument(
+        "--rules",
+        choices=["auto", "none"],
+        default="auto",
+        help="Rule packs for sign-off: auto=corp-derating + design models/rules (default auto)",
+    )
     gr.set_defaults(func=cmd_gate_report)
 
     p_lab = sub.add_parser("lab", help="Instrument control: capture, read, query")

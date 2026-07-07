@@ -20,7 +20,7 @@ benchgate 跟着设计工程运行：用户画原理图、定指标；系统在�
 | **电气应力与安全裕量** | `stress-sweep`、profile 应力探针（器件/电路级，非安规认证） | **已覆盖** |
 | **实物异常时对照分析** | 实测 Session、实测 vs 预测 RMSE、`sim diagnose` | **部分覆盖** |
 | **实验复现与审计** | `captured/sessions/`、`lab query` | **已覆盖** |
-| **可制造性、批次一致性** | — | **暂不覆盖**（后续讨论） |
+| **可制造性、批次一致性** | `blocks.yaml` 容差 + 环境/mix + `sim tolerance`（LHS/adaptive + surrogate）→ `gate report` | **已覆盖**（M1–M3） |
 
 用例图：[cli-usecase.puml](docs/diagrams/cli-usecase.puml)。
 

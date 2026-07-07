@@ -9,6 +9,7 @@ from typing import Any
 from benchgate.agent.tools import TOOLS
 from benchgate.gate.report import write_gate_report
 from benchgate.io.manifest import load_manifest, save_manifest
+from benchgate.rules.loader import default_rule_pack_paths
 from benchgate.kicad.project import KiCadProject
 from benchgate.kicad.spice_fields import apply_model_to_reference
 from benchgate.lab.capture import LabSession, capture_and_fit
@@ -510,6 +511,10 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
                 profile=profile,
             )
             stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
+        rule_pack_paths = None
+        if args.get("rules") != "none":
+            rule_pack_paths = default_rule_pack_paths(home=p.home, design=p.design)
+        mc_path = p.reports / "mc_tolerance" / "mc_tolerance.json"
         report = write_gate_report(
             mp,
             out,
@@ -518,6 +523,36 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             operating_point=args.get("operating_point"),
             sim_report_path=p.reports / "sim" / "sim_report.json",
             stress_sweep_path=stress_sweep_path,
+            monte_carlo_path=mc_path if mc_path.is_file() else None,
+            rule_pack_paths=rule_pack_paths,
+        )
+        return report.to_dict()
+
+    if name == "sim_tolerance":
+        from benchgate.sim.tolerance import run_tolerance_study
+
+        p = _paths_for_design(args["design_dir"], args)
+        mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
+        if not mp.is_absolute():
+            mp = resolve_project_path(p.design, mp, p.manifest)
+        out_dir = Path(args.get("output_dir", p.reports / "mc_tolerance"))
+        if not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "mc_tolerance")
+        report = run_tolerance_study(
+            p.design,
+            mp,
+            out_dir,
+            blocks_yaml=p.blocks_yaml,
+            sim_profile_path=p.sim_profile,
+            profile=str(args.get("profile", "charge_pump")),
+            n_samples=int(args.get("n_samples", 200)),
+            seed=int(args.get("seed", 42)),
+            strategy=str(args.get("strategy", "lhs")),
+            warmup_ratio=float(args.get("warmup_ratio", 0.25)),
+            surrogate_degree=int(args.get("surrogate_degree", 2)),
+            sequential_batch=int(args.get("sequential_batch", 25)),
+            sequential_ci_width=float(args.get("sequential_ci_width", 5.0)),
+            sequential_min_samples=int(args.get("sequential_min_samples", 50)),
         )
         return report.to_dict()
 
@@ -546,6 +581,10 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             run_gate=bool(args.get("run_gate", True)),
             run_auto_capture=bool(args.get("run_auto_capture", True)),
             auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
+            run_tolerance=bool(args.get("run_tolerance", True)),
+            tolerance_samples=int(args.get("tolerance_samples", 200)),
+            tolerance_strategy=str(args.get("tolerance_strategy", "adaptive")),
+            tolerance_seed=int(args.get("tolerance_seed", 42)),
         )
 
     if name == "watch_loop":
@@ -575,6 +614,10 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             interval_s=float(args.get("interval_s", 2.0)),
             debounce_s=float(args.get("debounce_s", 1.0)),
             max_iterations=max_iter,
+            run_tolerance=bool(args.get("run_tolerance", True)),
+            tolerance_samples=int(args.get("tolerance_samples", 200)),
+            tolerance_strategy=str(args.get("tolerance_strategy", "adaptive")),
+            tolerance_seed=int(args.get("tolerance_seed", 42)),
         )
 
     raise NotImplementedError(name)

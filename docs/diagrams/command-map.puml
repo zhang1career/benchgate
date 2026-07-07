@@ -78,6 +78,7 @@ package "sim" {
   component "diagnose" as sim_diag
   component "stress-sweep" as sim_ss
   component "sweep" as sim_sw
+  component "tolerance" as sim_tol
   component "cosim" as sim_cos
   note right of sim_run
     kicad-cli 导出 → ngspice -b
@@ -88,6 +89,12 @@ package "sim" {
   end note
   note right of sim_diag
     汇总网表检查、sim_report、log
+  end note
+  note right of sim_tol
+    blocks.yaml tolerances +
+    environment / mix：
+    LHS 或 adaptive 批跑，
+    yield、灵敏度、surrogate
   end note
 }
 

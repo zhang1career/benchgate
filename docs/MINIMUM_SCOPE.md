@@ -115,7 +115,7 @@ flowchart TB
 | 手工挂载厂商 SPICE 模型、Pin 映射 GUI | KiCad Simulation Model Editor | 内置 |
 | 无源 R/C/L 自动生成 SPICE | KiCad 符号 Value | 内置 |
 | ERC / DRC / BOM / Gerber | `kicad-cli` 或 kicad-mcp-pro | 成熟 |
-| 可制造性、批次一致性评估 | — | **暂不覆盖**（见 README） |
+| 可制造性、批次一致性评估 | `sim tolerance`（LHS/adaptive、环境轴、mix 混批、surrogate）→ `gate report` yield 规则 | **已覆盖**（M1–M3） |
 | Agent 加符号、拉线、改 PCB、布局 | kicad-mcp-pro / kicad-tools | 生态已有 |
 | 符号库搜索、LCSC 询价 | kicad-mcp-pro `lib_*` | 非 benchgate 目标 |
 | FreeRouting  autoroute | kicad-mcp-pro `route_*` | 非 benchgate 目标 |

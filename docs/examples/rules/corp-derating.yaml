@@ -1,0 +1,24 @@
+id: corp-derating-2024
+version: 1
+source: benchgate stress_limits.yaml + sim profile stress derating
+applies_to:
+  - gate
+severity_default: fail
+derating: 0.8
+
+rules:
+  - id: stress_derating_pass
+    when: {}
+    limit:
+      type: stress_passed
+      allow_warn: true
+    severity: fail
+    evidence: sim_report.stress
+
+  - id: stress_no_hard_failures
+    when: {}
+    limit:
+      type: stress_fail_count
+      max: 0
+    severity: fail
+    evidence: sim_report.stress

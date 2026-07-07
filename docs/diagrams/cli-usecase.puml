@@ -95,21 +95,28 @@ together {
     备选料 subckt
     登记 manifest
   ]
-  rectangle w3 #F7F7F7;line:666666 [
-    **watch once**
+  rectangle blk_mix #F7F7F7;line:666666 [
+    **blocks.yaml mix**
     ----
-    换料后自动 sim
-    与签核
+    多源 provider 权重 +
+    model / 容差混批
+  ]
+  rectangle tol3 #F7F7F7;line:666666 [
+    **sim tolerance**
+    ----
+    mix 抽样批跑，
+    验证换料后 yield
   ]
   rectangle g3 #F7F7F7;line:666666 [
     **gate report**
     ----
-    换料后 metrics
-    是否仍满足 spec
+    yield + metrics
+    vs 规则包签核
   ]
   P3 -down-> mb
-  mb -down-> w3
-  w3 -down-> g3
+  mb -down-> blk_mix
+  blk_mix -down-> tol3
+  tol3 -down-> g3
 }
 
 ' ── B 迭代与样机：控制改版、查清问题 ──
@@ -169,13 +176,28 @@ together {
 
 together {
   top to bottom direction
-  usecase "可制造性与批次\n一致性？\n量产与批次风险谁承担？" as P6
-  rectangle na #EEEEEE;line:AAAAAA;text:888888 [
-    **暂不覆盖**
+  usecase "可制造性与批次\n一致性？\n容差组合下指标会不会漂？" as P6
+  rectangle blk #F7F7F7;line:666666 [
+    **blocks.yaml**
     ----
-    后续版本讨论
+    circuit_spec 预算 +
+    tolerances 容差定义
   ]
-  P6 -down-> na
+  rectangle tol #F7F7F7;line:666666 [
+    **sim tolerance**
+    ----
+    LHS 抽样批跑 ngspice，
+    统计 yield、灵敏度与 surrogate
+  ]
+  rectangle g6 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    yield vs 规则包签核，
+    报告留档
+  ]
+  P6 -down-> blk
+  blk -down-> tol
+  tol -down-> g6
 }
 
 together {

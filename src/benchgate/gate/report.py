@@ -14,6 +14,8 @@ from benchgate.io.manifest import load_manifest
 from benchgate.instruments.types import Waveform
 from benchgate.lab.analyze import compare_waveforms
 from benchgate.lab.store import LabDataStore
+from benchgate.rules.evaluate import RuleContext, evaluate_rule_packs
+from benchgate.rules.loader import default_rule_pack_paths, load_rule_packs
 from benchgate.schemas import ComponentMapping, MappingManifest, MeasuredParams
 
 
@@ -218,6 +220,8 @@ def build_gate_report(
     operating_point: dict | None = None,
     sim_report_path: Path | None = None,
     stress_sweep_path: Path | None = None,
+    monte_carlo_path: Path | None = None,
+    rule_pack_paths: list[Path] | None = None,
 ) -> GateReport:
     sim_waveform: Waveform | None = None
     if sim_raw_path and sim_raw_path.exists():
@@ -228,8 +232,21 @@ def build_gate_report(
     inferred_op, stress_summary = (
         load_sim_report_context(sim_report_path) if sim_report_path else (None, None)
     )
+    sim_report_data: dict | None = None
+    if sim_report_path and sim_report_path.exists():
+        try:
+            sim_report_data = json.loads(sim_report_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            sim_report_data = None
     if operating_point is None and inferred_op:
         operating_point = inferred_op
+
+    monte_carlo_data: dict | None = None
+    if monte_carlo_path and monte_carlo_path.exists():
+        try:
+            monte_carlo_data = json.loads(monte_carlo_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            monte_carlo_data = None
 
     entries: list[GateEntry] = []
     for item in manifest.entries:
@@ -258,6 +275,16 @@ def build_gate_report(
         except (json.JSONDecodeError, OSError):
             pass
 
+    rules_summary = None
+    if rule_pack_paths is not None:
+        packs = load_rule_packs(rule_pack_paths)
+        ctx = RuleContext(
+            sim_report=sim_report_data,
+            monte_carlo=monte_carlo_data,
+            operating_point=operating_point,
+        )
+        rules_summary = evaluate_rule_packs(packs, ctx).to_dict()
+
     return GateReport(
         generated_at=datetime.now(timezone.utc).isoformat(),
         entries=entries,
@@ -270,6 +297,7 @@ def build_gate_report(
             "spec_failures": spec_failures,
             "stress_summary": stress_summary,
             "stress_sweep_worst": stress_sweep_summary,
+            "rules": rules_summary,
         },
     )
 
@@ -283,6 +311,8 @@ def write_gate_report(
     operating_point: dict | None = None,
     sim_report_path: Path | None = None,
     stress_sweep_path: Path | None = None,
+    monte_carlo_path: Path | None = None,
+    rule_pack_paths: list[Path] | None = None,
 ) -> GateReport:
     manifest = load_manifest(manifest_path)
     report = build_gate_report(
@@ -292,6 +322,8 @@ def write_gate_report(
         operating_point=operating_point,
         sim_report_path=sim_report_path,
         stress_sweep_path=stress_sweep_path,
+        monte_carlo_path=monte_carlo_path,
+        rule_pack_paths=rule_pack_paths,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")

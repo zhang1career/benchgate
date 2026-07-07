@@ -9,9 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from benchgate.gate.report import load_sim_report_context, write_gate_report
+from benchgate.io.blocks_config import has_tolerance_study
 from benchgate.mapping.engine import mapping_status, sync_project
 from benchgate.paths import benchgate_paths
 from benchgate.pipeline.local_blocks import sync_local_blocks
+from benchgate.rules.loader import default_rule_pack_paths
 from benchgate.sim.pipeline import run_project_sim
 from benchgate.watch.auto_capture import run_auto_capture
 
@@ -115,6 +117,10 @@ def watch_once(
     run_gate: bool = True,
     run_auto_capture: bool = True,
     auto_capture_dry_run: bool = False,
+    run_tolerance: bool = True,
+    tolerance_samples: int = 200,
+    tolerance_strategy: str = "adaptive",
+    tolerance_seed: int = 42,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
     operating_point: dict = {}
@@ -185,6 +191,27 @@ def watch_once(
                 result["stress_sweep"] = sweep_report.to_dict()
                 stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
 
+    mc_tolerance_path: Path | None = None
+    blocks_path = blocks_yaml or (design_dir / "models" / "blocks.yaml")
+    if run_tolerance and not status.get("unmapped") and blocks_path.is_file() and has_tolerance_study(blocks_path):
+        from benchgate.sim.tolerance import run_tolerance_study
+
+        tol_dir = reports_dir / "mc_tolerance"
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
+        tol_report = run_tolerance_study(
+            design_dir,
+            manifest_path,
+            tol_dir,
+            blocks_yaml=blocks_path,
+            sim_profile_path=sim_profile_path or paths.sim_profile,
+            profile=profile,
+            n_samples=tolerance_samples,
+            seed=tolerance_seed,
+            strategy=tolerance_strategy,
+        )
+        result["tolerance"] = tol_report.to_dict()
+        mc_tolerance_path = Path(tol_report.report_path) if tol_report.report_path else None
+
     if run_gate:
         gate_path = reports_dir / "gate_report.json"
         sim_report = sim_dir / "sim_report.json"
@@ -193,6 +220,7 @@ def watch_once(
             inferred_op, _ = load_sim_report_context(sim_report)
             if inferred_op and not op:
                 op = inferred_op
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
         gate = write_gate_report(
             manifest_path,
             gate_path,
@@ -201,6 +229,8 @@ def watch_once(
             operating_point=op,
             sim_report_path=sim_report if sim_report.exists() else None,
             stress_sweep_path=stress_sweep_path,
+            monte_carlo_path=mc_tolerance_path,
+            rule_pack_paths=default_rule_pack_paths(home=paths.home, design=design_dir),
         )
         result["gate"] = gate.to_dict()
         result["operating_point"] = op

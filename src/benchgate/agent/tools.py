@@ -312,6 +312,16 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "description": "Trigger lab capture for pending subckt entries (default true)",
                 },
                 "auto_capture_dry_run": {"type": "boolean", "description": "List candidates only"},
+                "run_tolerance": {
+                    "type": "boolean",
+                    "description": "Run sim tolerance when blocks.yaml has tolerances (default true)",
+                },
+                "tolerance_samples": {"type": "integer", "description": "MC sample budget (default 200)"},
+                "tolerance_strategy": {
+                    "type": "string",
+                    "enum": ["lhs", "adaptive", "sequential"],
+                    "description": "Tolerance strategy when auto-run (default adaptive)",
+                },
             },
             "required": ["design_dir"],
         },
@@ -322,6 +332,30 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "sim_tolerance": {
+        "description": (
+            "LHS/adaptive/sequential Monte Carlo over blocks.yaml tolerances, environment, "
+            "and mix (multi-provider); writes reports/mc_tolerance/mc_tolerance.json"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block (default charge_pump)"},
+                "n_samples": {"type": "integer", "description": "Sample budget (default 200)"},
+                "seed": {"type": "integer", "description": "RNG seed (default 42)"},
+                "strategy": {
+                    "type": "string",
+                    "enum": ["lhs", "adaptive", "sequential"],
+                    "description": "Sampling strategy (default lhs)",
+                },
+                "warmup_ratio": {"type": "number", "description": "Adaptive warmup fraction (default 0.25)"},
+                "surrogate_degree": {"type": "integer", "description": "Polynomial surrogate degree (default 2)"},
+                "output_dir": {"type": "string"},
             },
             "required": ["design_dir"],
         },
@@ -343,6 +377,9 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "run_gate": {"type": "boolean"},
                 "run_auto_capture": {"type": "boolean"},
                 "auto_capture_dry_run": {"type": "boolean"},
+                "run_tolerance": {"type": "boolean"},
+                "tolerance_samples": {"type": "integer"},
+                "tolerance_strategy": {"type": "string", "enum": ["lhs", "adaptive", "sequential"]},
             },
             "required": ["design_dir"],
         },
