@@ -8,144 +8,207 @@ skinparam usecase {
   BorderColor #A80036
 }
 
-' 六列水平并排；每列顶部=业务问题，其下=命令自上而下
+' 整理说明（原 11 题 → 7 题）
+' 合并：指标预算+承诺交期 | 应力+失效认证 | 改图验证+改版成本 | 实验复现+争议审计
+' 归类：A 投板前(列1-3) · B 迭代样机(列4-5) · C 量产与追溯(列6-7)
+' 排序：按风险暴露时机，投板前 → 样机迭代 → 量产/组织
 ' 完整 CLI 索引见 command-map.puml
 
 left to right direction
 
+' ── A 投板前：把风险拦在样机之前 ──
+
 together {
   top to bottom direction
-  usecase "功能/非功能指标\n预算是否成立？" as P1
+  usecase "指标与交付承诺\n是否站得住？\n投板前有无依据支撑承诺？" as P1
   rectangle spec #F7F7F7;line:666666 [
     **spec set**
     ----
     写 performance budget
     metric: [min, max]
   ]
-  rectangle pipe #F7F7F7;line:666666 [
-    **pipeline sync**
+  rectangle mst #F7F7F7;line:666666 [
+    **mapping status**
     ----
-    读取 blocks.yaml，构建 subckt，
-    写入 spec 与 metrics 到 manifest
+    ready / pending / unmapped，
+    模型是否就绪
   ]
   rectangle w1 #F7F7F7;line:666666 [
     **watch once**
     ----
-    检测原理图 / blocks 变更，
-    串联 pipeline → mapping → sim
+    pipeline → mapping → sim
+    → gate 全流程
   ]
   rectangle g1 #F7F7F7;line:666666 [
     **gate report**
     ----
-    比对 metrics 与 spec，
-    产出签核报告
+    metrics vs spec，
+    支撑指标与交期承诺
   ]
   P1 -down-> spec
-  spec -down-> pipe
-  pipe -down-> w1
+  spec -down-> mst
+  mst -down-> w1
   w1 -down-> g1
 }
 
 together {
   top to bottom direction
-  usecase "可制造性、\n产品一致性？" as P2
-  rectangle na #EEEEEE;line:AAAAAA;text:888888 [
-    **暂不覆盖**
-    ----
-    后续版本讨论
-  ]
-  P2 -down-> na
-}
-
-together {
-  top to bottom direction
-  usecase "电气应力与\n安全裕量？" as P3
+  usecase "失效、应力与认证风险\n能否提前看见？\n过应力与认证证据能否量产前留档？" as P2
   rectangle sim #F7F7F7;line:666666 [
     **sim run**
     ----
-    导出网表并批跑 ngspice，
-    采集 checks 与应力探针
+    批跑 ngspice，
+    采集应力探针
   ]
   rectangle ss #F7F7F7;line:666666 [
     **sim stress-sweep**
     ----
-    扫描工作点 / 负载条件，
-    汇总应力随参数变化
+    扫描工况，
+    汇总最坏应力
   ]
-  rectangle g3 #F7F7F7;line:666666 [
+  rectangle g2 #F7F7F7;line:666666 [
     **gate report**
     **--stress-sweep**
     ----
-    比对 operating_point 与
-    valid_range；非安规认证
+    应力 vs 降额签核；
+    非安规认证
   ]
-  P3 -down-> sim
+  rectangle ms2 #F7F7F7;line:666666 [
+    **model status**
+    ----
+    模型来源与 valid_range，
+    追溯设计假设
+  ]
+  P2 -down-> sim
   sim -down-> ss
-  ss -down-> g3
+  ss -down-> g2
+  g2 -down-> ms2
 }
 
 together {
   top to bottom direction
-  usecase "实物异常时\n如何分析？" as P4
-  rectangle lc #F7F7F7;line:666666 [
-    **lab characterize**
+  usecase "换料、多源、降本后\n承诺是否仍成立？\n替代料有验证而非碰运气？" as P3
+  rectangle mb #F7F7F7;line:666666 [
+    **model build**
+    **--provider vendor**
     ----
-    采实测波形并拟合，
-    更新 subckt 与 manifest
+    备选料 subckt
+    登记 manifest
+  ]
+  rectangle w3 #F7F7F7;line:666666 [
+    **watch once**
+    ----
+    换料后自动 sim
+    与签核
+  ]
+  rectangle g3 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    换料后 metrics
+    是否仍满足 spec
+  ]
+  P3 -down-> mb
+  mb -down-> w3
+  w3 -down-> g3
+}
+
+' ── B 迭代与样机：控制改版、查清问题 ──
+
+together {
+  top to bottom direction
+  usecase "改版后能否少打冤枉板、\n仍满足承诺？\n改图是解难还是无把握烧钱？" as P4
+  rectangle pf #F7F7F7;line:666666 [
+    **sim preflight**
+    ----
+    仿真前网表检查，
+    先拦低级问题
+  ]
+  rectangle wl #F7F7F7;line:666666 [
+    **watch loop**
+    ----
+    改图后自动回归
   ]
   rectangle g4 #F7F7F7;line:666666 [
     **gate report**
     ----
-    比对实测与仿真 RMSE，
+    变更后签核留档，
+    避免盲改与重复打板
+  ]
+  P4 -down-> pf
+  pf -down-> wl
+  wl -down-> g4
+}
+
+together {
+  top to bottom direction
+  usecase "样机异常时能否\n快速分清责任？\n设计、物料、测试孰是孰非？" as P5
+  rectangle lc #F7F7F7;line:666666 [
+    **lab characterize**
+    ----
+    采波形拟合，
+    更新实测模型
+  ]
+  rectangle g5 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    实测 vs 仿真 RMSE，
     定位偏差指标
   ]
   rectangle diag #F7F7F7;line:666666 [
     **sim diagnose**
     ----
-    汇总网表检查、sim_report、
-    log，查预测侧问题
+    汇总网表检查、log，
+    查预测侧问题
   ]
-  P4 -down-> lc
-  lc -down-> g4
-  g4 -down-> diag
+  P5 -down-> lc
+  lc -down-> g5
+  g5 -down-> diag
+}
+
+' ── C 量产与组织：一致性、可追溯 ──
+
+together {
+  top to bottom direction
+  usecase "可制造性与批次\n一致性？\n量产与批次风险谁承担？" as P6
+  rectangle na #EEEEEE;line:AAAAAA;text:888888 [
+    **暂不覆盖**
+    ----
+    后续版本讨论
+  ]
+  P6 -down-> na
 }
 
 together {
   top to bottom direction
-  usecase "改图后验证\n是否仍有效？" as P5
-  rectangle wl #F7F7F7;line:666666 [
-    **watch loop**
-    ----
-    持续监听原理图 / blocks，
-    变更后自动跑全流程
-  ]
-  rectangle g5 #F7F7F7;line:666666 [
-    **gate report**
-    ----
-    每次变更后重新签核，
-    报告留档于 reports/
-  ]
-  P5 -down-> wl
-  wl -down-> g5
-}
-
-together {
-  top to bottom direction
-  usecase "实验数据如何\n复现与审计？" as P6
+  usecase "设计依据与实验记录\n能否长期复现、可审计？\n人员变动后能否调出签核与实测？" as P7
   rectangle cap #F7F7F7;line:666666 [
     **lab capture**
     ----
-    将波形与工况写入
+    波形与工况写入
     captured/sessions/
   ]
-  rectangle lq #F7F7F7;line:666666 [
-    **lab query**
+  rectangle g7 #F7F7F7;line:666666 [
+    **gate report**
     ----
-    按 session / metric / drift
-    查询历史实测记录
+    签核结论写入
+    reports/ 留档
   ]
-  P6 -down-> cap
-  cap -down-> lq
+  rectangle lqs #F7F7F7;line:666666 [
+    **lab query sessions**
+    ----
+    按时间 / 元件查
+    历史 session
+  ]
+  rectangle lqm #F7F7F7;line:666666 [
+    **lab query metric**
+    ----
+    跨 session 指标
+    时间序列
+  ]
+  P7 -down-> cap
+  cap -down-> g7
+  g7 -down-> lqs
+  lqs -down-> lqm
 }
 
 P1 -[hidden]right- P2
@@ -153,5 +216,6 @@ P2 -[hidden]right- P3
 P3 -[hidden]right- P4
 P4 -[hidden]right- P5
 P5 -[hidden]right- P6
+P6 -[hidden]right- P7
 
 @enduml
