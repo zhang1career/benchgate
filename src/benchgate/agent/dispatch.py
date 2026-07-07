@@ -553,6 +553,11 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             sequential_batch=int(args.get("sequential_batch", 25)),
             sequential_ci_width=float(args.get("sequential_ci_width", 5.0)),
             sequential_min_samples=int(args.get("sequential_min_samples", 50)),
+            jobs=int(args.get("jobs", 4)),
+            sim_tier=args.get("sim_tier"),
+            tran_step=args.get("tran_step"),
+            tran_stop=args.get("tran_stop"),
+            maxstep=args.get("maxstep"),
         )
         return report.to_dict()
 
@@ -583,8 +588,9 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
             run_tolerance=bool(args.get("run_tolerance", True)),
             tolerance_samples=int(args.get("tolerance_samples", 200)),
-            tolerance_strategy=str(args.get("tolerance_strategy", "adaptive")),
+            tolerance_strategy=str(args.get("tolerance_strategy", "auto")),
             tolerance_seed=int(args.get("tolerance_seed", 42)),
+            tolerance_jobs=int(args.get("tolerance_jobs", 4)),
         )
 
     if name == "watch_loop":
@@ -616,8 +622,9 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             max_iterations=max_iter,
             run_tolerance=bool(args.get("run_tolerance", True)),
             tolerance_samples=int(args.get("tolerance_samples", 200)),
-            tolerance_strategy=str(args.get("tolerance_strategy", "adaptive")),
+            tolerance_strategy=str(args.get("tolerance_strategy", "auto")),
             tolerance_seed=int(args.get("tolerance_seed", 42)),
+            tolerance_jobs=int(args.get("tolerance_jobs", 4)),
         )
 
     raise NotImplementedError(name)

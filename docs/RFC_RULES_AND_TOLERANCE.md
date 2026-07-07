@@ -109,3 +109,17 @@ M3（已实现）：环境轴扰动、自适应抽样、线性 surrogate 良率�
 | `yield_ci_*` | 报告 Wilson 良率置信区间 |
 
 后续（未排期）：Sobol、GP surrogate、工艺变量 DFM。
+
+### M4：并行、粗精 transient、分层 MC
+
+| 字段 / 参数 | 含义 |
+|-------------|------|
+| `--jobs N` | 并行 ngspice 样本数；`0` = `cpu_count-1` |
+| `--strategy auto` | 序贯停止 + 自动并行 + 粗→细 transient |
+| `tolerance_sim.coarse/fine` | `tran_step` / `tran_stop` / `maxstep` 预设；CLI `--tran-*` 可覆盖 |
+| `tolerance_sim.tier` | `auto`（默认）\| `coarse` \| `fine`；`--sim-tier` 覆盖 |
+| `refine_margin_pct` | 粗仿真 metric 距规格边界 ≤ 该 % 时跑细仿真；**按项目**在 `models/blocks.yaml` → `tolerance_sim` 配置，缺省回退 `sim_profiles.yaml` 对应 profile，再缺省为 5 |
+| `points[].sim_tier` | 本样本实际使用的 transient 档位 |
+| `mc_layers[]` | 显式分层 MC；缺省时由顶层 `tolerances`/`environment` 合成 `full` 层 |
+| `blocks[].tolerances` | 块级层（`scope: block`，读 `blocks/*.net`） |
+| `report.layers` | 多 layer 时各层完整报告字典 |

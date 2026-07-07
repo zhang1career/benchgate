@@ -29,8 +29,9 @@ def watch_loop(
     auto_capture_dry_run: bool = False,
     run_tolerance: bool = True,
     tolerance_samples: int = 200,
-    tolerance_strategy: str = "adaptive",
+    tolerance_strategy: str = "auto",
     tolerance_seed: int = 42,
+    tolerance_jobs: int = 4,
     interval_s: float = 2.0,
     debounce_s: float = 1.0,
     max_iterations: int | None = None,
@@ -67,6 +68,7 @@ def watch_loop(
             tolerance_samples=tolerance_samples,
             tolerance_strategy=tolerance_strategy,
             tolerance_seed=tolerance_seed,
+            tolerance_jobs=tolerance_jobs,
         )
         iterations += 1
         last_result["iterations"] = iterations

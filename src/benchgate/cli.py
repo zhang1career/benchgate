@@ -200,6 +200,11 @@ def cmd_sim_tolerance(args: argparse.Namespace) -> int:
         sequential_batch=args.sequential_batch,
         sequential_ci_width=args.sequential_ci_width,
         sequential_min_samples=args.sequential_min_samples,
+        jobs=args.jobs,
+        sim_tier=args.sim_tier,
+        tran_step=args.tran_step,
+        tran_stop=args.tran_stop,
+        maxstep=args.maxstep,
     )
     payload = report.to_dict()
     print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -242,6 +247,8 @@ def cmd_watch_once(args: argparse.Namespace) -> int:
         params["tolerance_strategy"] = args.tolerance_strategy
     if getattr(args, "tolerance_samples", None):
         params["tolerance_samples"] = args.tolerance_samples
+    if getattr(args, "tolerance_jobs", None) is not None:
+        params["tolerance_jobs"] = args.tolerance_jobs
     result = dispatch("watch_once", params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
@@ -274,6 +281,7 @@ def cmd_watch_loop(args: argparse.Namespace) -> int:
         run_tolerance=not args.no_tolerance,
         tolerance_samples=args.tolerance_samples,
         tolerance_strategy=args.tolerance_strategy,
+        tolerance_jobs=args.tolerance_jobs,
         interval_s=args.interval,
         debounce_s=args.debounce,
         max_iterations=max_iter,
@@ -624,9 +632,9 @@ def main(argv: list[str] | None = None) -> int:
     stol.add_argument("--seed", type=int, default=42)
     stol.add_argument(
         "--strategy",
-        choices=["lhs", "adaptive", "sequential"],
+        choices=["lhs", "adaptive", "sequential", "auto"],
         default="lhs",
-        help="lhs | adaptive (warmup+refine) | sequential (CI stopping, M3+)",
+        help="lhs | adaptive | sequential (CI stop) | auto (sequential+parallel+coarse/fine)",
     )
     stol.add_argument(
         "--warmup-ratio",
@@ -638,6 +646,21 @@ def main(argv: list[str] | None = None) -> int:
     stol.add_argument("--sequential-batch", type=int, default=25, help="Batch size for --strategy sequential")
     stol.add_argument("--sequential-ci-width", type=float, default=5.0, help="Stop when Wilson yield CI width <= pct")
     stol.add_argument("--sequential-min-samples", type=int, default=50, help="Min samples before sequential stop")
+    stol.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="Parallel workers (0=cpu_count-1, default 4)",
+    )
+    stol.add_argument(
+        "--sim-tier",
+        choices=["auto", "coarse", "fine"],
+        default=None,
+        help="Transient preset tier (default from blocks.yaml / profile)",
+    )
+    stol.add_argument("--tran-step", default=None, help="Override coarse/fine tran step (e.g. 2u)")
+    stol.add_argument("--tran-stop", default=None, help="Override tran stop (e.g. 35m)")
+    stol.add_argument("--maxstep", default=None, help="Override .options maxstep")
     stol.set_defaults(func=cmd_sim_tolerance)
 
     p_kicad = sub.add_parser("kicad", help="KiCad schematic utilities (KiCad 10-safe)")
@@ -670,8 +693,9 @@ def main(argv: list[str] | None = None) -> int:
         help="List pending auto-capture candidates without calling lab",
     )
     wo.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
-    wo.add_argument("--tolerance-strategy", default="adaptive", choices=["lhs", "adaptive", "sequential"])
+    wo.add_argument("--tolerance-strategy", default="auto", choices=["lhs", "adaptive", "sequential", "auto"])
     wo.add_argument("--tolerance-samples", type=int, default=200)
+    wo.add_argument("--tolerance-jobs", type=int, default=4, help="Parallel MC workers (0=auto)")
     wo.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wo.set_defaults(func=cmd_watch_once)
     wl = watch_sub.add_parser(
@@ -685,8 +709,9 @@ def main(argv: list[str] | None = None) -> int:
     wl.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
     wl.add_argument("--auto-capture-dry-run", action="store_true", help="Dry-run auto capture only")
     wl.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
-    wl.add_argument("--tolerance-strategy", default="adaptive", choices=["lhs", "adaptive", "sequential"])
+    wl.add_argument("--tolerance-strategy", default="auto", choices=["lhs", "adaptive", "sequential", "auto"])
     wl.add_argument("--tolerance-samples", type=int, default=200)
+    wl.add_argument("--tolerance-jobs", type=int, default=4, help="Parallel MC workers (0=auto)")
     wl.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wl.add_argument("--interval", type=float, default=2.0, help="Seconds between polls (default 2)")
     wl.add_argument("--debounce", type=float, default=1.0, help="Extra wait after a change batch (default 1)")

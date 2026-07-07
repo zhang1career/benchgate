@@ -119,8 +119,9 @@ def watch_once(
     auto_capture_dry_run: bool = False,
     run_tolerance: bool = True,
     tolerance_samples: int = 200,
-    tolerance_strategy: str = "adaptive",
+    tolerance_strategy: str = "auto",
     tolerance_seed: int = 42,
+    tolerance_jobs: int = 4,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
     operating_point: dict = {}
@@ -208,6 +209,7 @@ def watch_once(
             n_samples=tolerance_samples,
             seed=tolerance_seed,
             strategy=tolerance_strategy,
+            jobs=tolerance_jobs,
         )
         result["tolerance"] = tol_report.to_dict()
         mc_tolerance_path = Path(tol_report.report_path) if tol_report.report_path else None
