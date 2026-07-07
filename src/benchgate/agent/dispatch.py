@@ -9,6 +9,7 @@ from typing import Any
 from benchgate.agent.tools import TOOLS
 from benchgate.gate.report import write_gate_report
 from benchgate.io.manifest import load_manifest, save_manifest
+from benchgate.rules.loader import default_rule_pack_paths
 from benchgate.kicad.project import KiCadProject
 from benchgate.kicad.spice_fields import apply_model_to_reference
 from benchgate.lab.capture import LabSession, capture_and_fit
@@ -83,15 +84,17 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         return mapping_status(load_manifest(mp, global_models_dir=p.global_models))
 
     if name == "model_build":
-        from benchgate.providers import register_model
-        from benchgate.providers.ltspice import LtspiceModelProvider
+        from benchgate.mapping.engine import build_model
+        from benchgate.providers.factory import create_model_provider
+        from benchgate.providers.meas_log import merge_metrics, parse_meas_file
 
         p = _paths_for_design(args["design_dir"], args)
         provider_name = args.get("provider", "ltspice")
-        if provider_name != "ltspice":
-            raise ValueError(f"unknown model provider: {provider_name!r}")
-
-        source_file = resolve_project_path(p.design, args["source_file"], p.design)
+        source_file = (
+            resolve_project_path(p.design, args["source_file"], p.design)
+            if args.get("source_file")
+            else None
+        )
         pins = args["pins"].split() if args.get("pins") else None
         manifest = (
             load_manifest(p.manifest, global_models_dir=p.global_models)
@@ -101,28 +104,45 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         entry = manifest.find(args["kicad_key"]) or ComponentMapping(kicad_key=args["kicad_key"])
         existing = entry.provenance
         valid_range = _resolve_provenance_dict(args, "valid_range", existing.valid_range if existing else None)
-        metrics = _resolve_provenance_dict(args, "metrics", existing.metrics if existing else None)
-        provider = LtspiceModelProvider(
-            net_path=source_file,
-            sim_name=args["sim_name"],
+        log_metrics: dict[str, float] = {}
+        if args.get("from_meas"):
+            meas_path = resolve_project_path(p.design, args["from_meas"], p.design)
+            log_metrics = parse_meas_file(meas_path)
+        base_metrics = _resolve_provenance_dict(args, "metrics", existing.metrics if existing else None)
+        metrics = merge_metrics(log_metrics, base_metrics)
+        sim_name = args.get("sim_name") or args.get("mpn") or entry.metadata.get("value")
+        lib_path = None
+        if args.get("lib_path"):
+            lib_path = resolve_project_path(p.design, args["lib_path"], p.design)
+        elif provider_name in ("bench", "vendor") and args.get("source_file"):
+            lib_path = resolve_project_path(p.design, args["source_file"], p.design)
+        provider = create_model_provider(
+            provider_name,
+            entry=entry,
+            source_file=source_file,
+            sim_name=sim_name,
             pins=pins,
+            mpn=args.get("mpn"),
+            lib_path=lib_path,
             valid_range=valid_range,
             metrics=metrics,
             notes=args.get("notes"),
+            sim_pins=args.get("sim_pins"),
         )
         if args.get("reference"):
             entry.reference = args["reference"]
-        artifact = provider.build(entry, workdir=p.subckt)
-        register_model(manifest, entry, artifact)
+        entry = build_model(manifest, entry, provider, workdir=p.subckt)
         save_manifest(manifest, p.manifest, global_models_dir=p.global_models)
+        prov = entry.provenance
         return {
             "kicad_key": entry.kicad_key,
             "provider": provider_name,
-            "source": artifact.provenance.source.value,
-            "subckt": str(artifact.lib_path),
-            "sim_name": artifact.sim_name,
-            "sim_pins": artifact.sim_pins,
-            "warnings": artifact.provenance.notes,
+            "source": prov.source.value if prov else None,
+            "subckt": str(entry.sim_library),
+            "sim_name": entry.sim_name,
+            "sim_pins": entry.sim_pins,
+            "metrics": prov.metrics if prov else {},
+            "warnings": prov.notes if prov else None,
         }
 
     if name == "spec_set":
@@ -381,12 +401,34 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir,
             sim_profile_path=p.sim_profile,
             profile=profile,
+            fail_on_preflight_error=bool(args.get("fail_on_preflight")),
         )
         return {
             "success": report.success,
             "report": report.to_dict(),
             "stderr": result.stderr,
         }
+
+    if name == "sim_stress_sweep":
+        from benchgate.sim.stress_sweep import run_stress_sweep
+
+        p = _paths_for_design(args["design_dir"], args)
+        mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
+        if not mp.is_absolute():
+            mp = resolve_project_path(p.design, mp, p.manifest)
+        out_dir = Path(args["output_dir"]) if args.get("output_dir") else p.reports / "stress_sweep"
+        if args.get("output_dir") and not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "stress_sweep")
+        elif not args.get("output_dir"):
+            out_dir = p.reports / "stress_sweep"
+        report = run_stress_sweep(
+            p.design,
+            mp,
+            out_dir,
+            sim_profile_path=p.sim_profile,
+            profile=args.get("profile", "default"),
+        )
+        return {"success": bool(report.to_dict().get("worst", {}).get("passed")), "report": report.to_dict()}
 
     if name == "sim_sweep":
         from benchgate.sim.sweep import run_sweep
@@ -455,14 +497,75 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         sim_raw = Path(args["sim_raw_path"]) if args.get("sim_raw_path") else None
         if sim_raw and not sim_raw.is_absolute():
             sim_raw = resolve_project_path(p.design, sim_raw, p.reports / "sim" / "sim_waveform.csv")
+        stress_sweep_path: Path | None = None
+        if args.get("stress_sweep"):
+            from benchgate.sim.stress_sweep import run_stress_sweep
+
+            profile = str(args.get("profile", "default"))
+            sweep_dir = p.reports / "stress_sweep"
+            sweep_report = run_stress_sweep(
+                p.design,
+                mp,
+                sweep_dir,
+                sim_profile_path=p.sim_profile,
+                profile=profile,
+            )
+            stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
+        rule_pack_paths = None
+        if args.get("rules") != "none":
+            rule_pack_paths = default_rule_pack_paths(home=p.home, design=p.design)
+        mc_path = p.reports / "mc_tolerance" / "mc_tolerance.json"
         report = write_gate_report(
             mp,
             out,
             captured_dir=p.captured,
             sim_raw_path=sim_raw,
             operating_point=args.get("operating_point"),
+            sim_report_path=p.reports / "sim" / "sim_report.json",
+            stress_sweep_path=stress_sweep_path,
+            monte_carlo_path=mc_path if mc_path.is_file() else None,
+            rule_pack_paths=rule_pack_paths,
         )
         return report.to_dict()
+
+    if name == "sim_tolerance":
+        from benchgate.sim.tolerance import run_tolerance_study
+
+        p = _paths_for_design(args["design_dir"], args)
+        mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
+        if not mp.is_absolute():
+            mp = resolve_project_path(p.design, mp, p.manifest)
+        out_dir = Path(args.get("output_dir", p.reports / "mc_tolerance"))
+        if not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "mc_tolerance")
+        report = run_tolerance_study(
+            p.design,
+            mp,
+            out_dir,
+            blocks_yaml=p.blocks_yaml,
+            sim_profile_path=p.sim_profile,
+            profile=str(args.get("profile", "charge_pump")),
+            n_samples=int(args.get("n_samples", 200)),
+            seed=int(args.get("seed", 42)),
+            strategy=str(args.get("strategy", "lhs")),
+            warmup_ratio=float(args.get("warmup_ratio", 0.25)),
+            surrogate_degree=int(args.get("surrogate_degree", 2)),
+            sequential_batch=int(args.get("sequential_batch", 25)),
+            sequential_ci_width=float(args.get("sequential_ci_width", 5.0)),
+            sequential_min_samples=int(args.get("sequential_min_samples", 50)),
+            jobs=int(args.get("jobs", 4)),
+            sim_tier=args.get("sim_tier"),
+            tran_step=args.get("tran_step"),
+            tran_stop=args.get("tran_stop"),
+            maxstep=args.get("maxstep"),
+        )
+        return report.to_dict()
+
+    if name == "sim_diagnose":
+        p = _paths_for_design(args["design_dir"], args)
+        from benchgate.sim.diagnose import diagnose_sim
+
+        return diagnose_sim(p.reports)
 
     if name == "watch_once":
         p = _paths_for_design(args["design_dir"], args)
@@ -473,6 +576,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             reports_dir=p.reports,
             state_path=p.state,
             sim_profile_path=p.sim_profile,
+            profile=str(args.get("profile", "default")),
             subckt_dir=p.subckt,
             global_models_dir=p.global_models,
             blocks_yaml=p.blocks_yaml,
@@ -480,6 +584,47 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             run_pipeline=bool(args.get("run_pipeline", True)),
             run_sim=bool(args.get("run_sim", True)),
             run_gate=bool(args.get("run_gate", True)),
+            run_auto_capture=bool(args.get("run_auto_capture", True)),
+            auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
+            run_tolerance=bool(args.get("run_tolerance", True)),
+            tolerance_samples=int(args.get("tolerance_samples", 200)),
+            tolerance_strategy=str(args.get("tolerance_strategy", "auto")),
+            tolerance_seed=int(args.get("tolerance_seed", 42)),
+            tolerance_jobs=int(args.get("tolerance_jobs", 4)),
+        )
+
+    if name == "watch_loop":
+        from benchgate.watch.loop import watch_loop
+
+        p = _paths_for_design(args["design_dir"], args)
+        max_iter = args.get("max_iterations")
+        if max_iter == 0:
+            max_iter = None
+        return watch_loop(
+            p.design,
+            manifest_path=p.manifest,
+            models_dir=p.models,
+            reports_dir=p.reports,
+            state_path=p.state,
+            sim_profile_path=p.sim_profile,
+            profile=str(args.get("profile", "default")),
+            subckt_dir=p.subckt,
+            global_models_dir=p.global_models,
+            blocks_yaml=p.blocks_yaml,
+            tmp_dir=p.tmp_root / "pipeline",
+            run_pipeline=bool(args.get("run_pipeline", True)),
+            run_sim=bool(args.get("run_sim", True)),
+            run_gate=bool(args.get("run_gate", True)),
+            run_auto_capture=bool(args.get("run_auto_capture", True)),
+            auto_capture_dry_run=bool(args.get("auto_capture_dry_run", False)),
+            interval_s=float(args.get("interval_s", 2.0)),
+            debounce_s=float(args.get("debounce_s", 1.0)),
+            max_iterations=max_iter,
+            run_tolerance=bool(args.get("run_tolerance", True)),
+            tolerance_samples=int(args.get("tolerance_samples", 200)),
+            tolerance_strategy=str(args.get("tolerance_strategy", "auto")),
+            tolerance_seed=int(args.get("tolerance_seed", 42)),
+            tolerance_jobs=int(args.get("tolerance_jobs", 4)),
         )
 
     raise NotImplementedError(name)

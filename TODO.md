@@ -1,50 +1,70 @@
 # benchgate TODO
 
-项目级待办（Agent / 维护者）。已完成里程碑见 `docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md`。
+项目级待办（Agent / 维护者）。架构与里程碑见 `docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md`、`docs/MINIMUM_SCOPE.md`。
 
----
-
-## 工程 / Git
-
-- [ ] **Commit & merge pipeline 分支** — `feature-sim-20260702` 上 pipeline、watch 编排、blocks 示例、文档对齐、85 tests 尚未入库
+**测试基线**：`pytest`（当前 156+ tests）
 
 ---
 
 ## Agent 自动化
 
-- [ ] **`watch loop`** — 持续监听 `design/` + `models/blocks.yaml` / `blocks/*`，变更时自动跑 `watch_once`（pipeline → mapping → sim → gate）；CLI `benchgate watch loop`，Agent `watch_loop`；可选 `--interval`、debounce、Git hook 集成
-- [ ] **`auto_capture`** — watch 检测到 pending 元件时自动触发 `lab capture`（MINIMUM_SCOPE 旧描述曾提及，未实现）
+- [x] **`watch loop`** — 持续监听 KiCad + `models/blocks.yaml` / `blocks/*`，变更时跑 `watch_once`；CLI `benchgate watch loop`，Agent `watch_loop`
+- [x] **`watch once`** — pipeline → mapping sync → sim → gate（+ 可选 stress_sweep）；CLI / Agent `watch_once`
+- [x] **`watch` + `sim tolerance`** — blocks.yaml 含 tolerances 时自动跑 MC 并写入 gate yield 签核
+- [x] **`auto_capture`** — pending SUBCKT 元件触发 `lab capture`；`models/auto_capture.yaml` 可配；CLI `--no-auto-capture` / `--auto-capture-dry-run`
+- [x] **MCP `sim_tolerance`** — Agent / MCP 工具注册与 dispatch 对齐
 
 ---
 
-## RFC 代码缺口（文档已写、实现未齐）
+## ModelProvider（RFC）
 
-- [ ] **`BenchModelProvider`** — `providers/bench.py`：包裹现有 `lab/fit` + `apply_measured_model`，与 `LtspiceModelProvider` 同形（RFC §2、§4）
-- [ ] **`mapping/engine.build_model()`** — 统一 `provider.build()` → `register_model()` 收口；`apply_measured_model` 改为 BenchModelProvider 薄封装（RFC §2.3、§4）
-- [ ] **`--from-meas`** — CLI `model build --from-meas block.log`：解析 LTspice/ngspice `.MEAS` 日志 → `provenance.metrics`（RFC §10.5，M7 延后）
-- [ ] **`sim-ltspice` optional extra** — `pyproject.toml` 增加 `sim-ltspice = ["spicelib>=1.6"]`，与 `lab` / `agent` / `dev` 并列（RFC §5.2）
-- [ ] **`operating_point` 自动推断** — 从 `sim_profiles.yaml` 或 sim 结果推断工作点，供 gate `valid_range` 校验（RFC §3.2，现仅 CLI / `blocks.yaml` 显式传入）
-- [ ] **LTspice 方言归一化补全** — `.step`、加密 LT/ADI 模型明确报错、未覆盖原语显式 fail（RFC §5.3）
-- [ ] **Vendor / Datasheet Provider** — `ModelSource.VENDOR` / `DATASHEET` 的 `ModelProvider` 实现（RFC §2.1 枚举，无实现）
+- [x] **`BenchModelProvider`** — `providers/bench.py`
+- [x] **`DatasheetModelProvider`** — `providers/datasheet.py` + `config/datasheet_models.yaml`
+- [x] **`LtspiceModelProvider`** — `.net`/`.cir`（默认）；`.asc` 可选 `[sim-ltspice]`
+- [x] **`VendorModelProvider`** — `providers/vendor.py`；CLI `model build --provider vendor --lib …`
+- [x] **`build_model()` / `register_model()`** — `mapping/engine.py` 统一收口
+- [x] **`--from-meas`** — `model build --from-meas` + pipeline `metrics_file: *.log`
+- [x] **`ensure_datasheet_models()`** — mapping sync 时自动补 catalog 模型
+
+---
+
+## 仿真 · 签核
+
+- [x] **`operating_point` 推断** — `sim/profile.infer_operating_point`
+- [x] **应力签核** — `stress` block、`stress_limits.yaml`、`sim stress-sweep`
+- [x] **`sim diagnose`** — 汇总 preflight / sim_report / ngspice.log
+- [x] **gate `--stress-sweep`** — 单独跑 stress_sweep 再写 gate report
+- [x] **连接器 preflight** — J* / `Connector:` → info `connector_dropped`（charge-pump 已验）
+- [x] **KiCad 10 安全 Sim.\*** — `kicad sim-fields`（文本编辑，不用 `Schematic.save()`）
+- [x] **`sim tolerance` M1–M3** — LHS/adaptive/sequential、环境轴、mix 多 provider、surrogate
 
 ---
 
 ## 测试
 
-- [ ] **`watch_once` 端到端集成测** — 改 `blocks.yaml` / `blocks/*` → 全流水线结果断言（现仅有 `detect_changes` / `pipeline_files`）
-- [ ] **真实 KiCad 工程 + pipeline** — 绑仓库内 `design/myboard`（或等价 fixture）跑 pipeline → manifest → gate
-- [ ] **`.asc` → netlist** — `resolve_spice_source` 在有 LTspice/Wine 环境下的可选集成测（CI 可 skip）
+- [x] **`watch_once` 基础 E2E** — `tests/test_watch_once_e2e.py`（mapping + gate，无 ngspice）
+- [x] **`watch_once` + blocks 变更** — 改 `blocks.yaml` / metrics → pipeline + manifest + gate 断言
+- [x] **pipeline / blocks** — `tests/test_pipeline.py`
+- [x] **providers / vendor / auto_capture / diagnose** — 单元测覆盖
+- [x] **tolerance M1–M3** — `tests/test_tolerance.py`、`tests/test_tolerance_m3.py`
+- [ ] **真实 KiCad 工程 fixture** — 绑 `design/myboard` 或 charge-pump 跑 sim（CI 需 KiCad + ngspice）
+- [ ] **`.asc` → netlist** — 有 LTspice/Wine 时的可选集成测（CI skip）
+- [ ] **auto_capture 实机** — 实验室仪器 + `lab.yaml` 端到端（非 dry-run）
 
 ---
 
 ## 文档 / 元数据
 
-- [ ] **RFC §4 实现对照表** — 更新为实际代码（`providers/bench.py`、`build_model()` 等待办状态）
-- [ ] **`pyproject.toml` description** — 反映自顶向下 / 自底向上 / blocks.yaml，不单写「台架→KiCad」
+- [x] **README 重构** — 根本问题（仿真被忽视）+ 业务问题对照表 + PlantUML
+- [x] **可制造性 / 产品一致性** — M1–M3 `sim tolerance` + watch/MCP 接入；见 RFC_RULES_AND_TOLERANCE.md
+- [x] **P3 换料多源** — cli-usecase.puml：`model build` → `blocks.yaml mix` → `sim tolerance` → `gate report`
+- [ ] **RFC §4 实现对照表** — 与当前 providers / CLI 对齐（MINIMUM_SCOPE §8 已部分对齐）
+- [ ] **`pyproject.toml` description`** — 反映自顶向下 / 自底向上 / blocks.yaml
+- [ ] **MINIMUM_SCOPE.md** — §8 工具表 / §7.5 watch 已对齐；§11 竞品表可择机更新
 
 ---
 
 ## 示例 / 落地（可选）
 
-- [ ] **设计目录 blocks 模板** — 在 `design/myboard/models/` 放可跑的 `blocks.yaml` + 示例网表（现仅 `docs/examples/`）
-- [ ] **MCP server 封装** — 将 `agent/dispatch` + `TOOLS` 暴露为独立 MCP 进程（现仅有内部 dispatch）
+- [ ] **`design/myboard/models/blocks.yaml`** — 仓库内可跑模板（现 `docs/examples/blocks.yaml`）
+- [ ] **charge-pump** — VOUT ~20 V 设计收敛；Q2 ic_peak 信息性 warn；批量写 Sim.* 到原理图

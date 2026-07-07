@@ -1,0 +1,135 @@
+@startuml
+title CLI 命令索引
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam noteBackgroundColor #FEFECE
+
+package "mapping" {
+  component "sync" as map_sync
+  component "status" as map_stat
+  note right of map_sync
+    扫描原理图符号，更新仿真模型与指标数据
+    (manifest.yaml)；同步 SPICE 属性
+  end note
+  note right of map_stat
+    列出 ready / pending / unmapped
+  end note
+}
+
+package "pipeline" {
+  component "sync" as pipe_sync
+  note right of pipe_sync
+    读取 models/blocks.yaml：
+    构建 subckt、写入 spec 与 metrics
+    到仿真模型与指标数据
+  end note
+}
+
+package "watch" {
+  component "once" as w_once
+  component "loop" as w_loop
+  note right of w_once
+    检测 KiCad / blocks 变更 →
+    pipeline → mapping → sim → gate
+  end note
+  note right of w_loop
+    持续 poll；可选 auto_capture
+  end note
+}
+
+package "model" {
+  component "build" as m_build
+  component "status" as m_stat
+  note right of m_build
+    provider: ltspice | datasheet
+    | vendor | bench
+    → subckt + provenance
+  end note
+  note right of m_stat
+    各元件 source、valid_range、spec
+  end note
+}
+
+package "spec" {
+  component "set" as spec_set
+  note right of spec_set
+    写 performance budget
+    {metric: [min, max]}
+  end note
+}
+
+package "lab" {
+  component "list" as lab_list
+  component "read" as lab_read
+  component "capture" as lab_cap
+  component "characterize" as lab_char
+  component "query …" as lab_q
+  note bottom of lab_char
+    采波形 + 拟合 → subckt + manifest
+  end note
+  note bottom of lab_q
+    sessions | metric | drift | waveform
+  end note
+}
+
+package "sim" {
+  component "run" as sim_run
+  component "preflight" as sim_pf
+  component "diagnose" as sim_diag
+  component "stress-sweep" as sim_ss
+  component "sweep" as sim_sw
+  component "tolerance" as sim_tol
+  component "cosim" as sim_cos
+  note right of sim_run
+    kicad-cli 导出 → ngspice -b
+    checks + stress
+  end note
+  note right of sim_pf
+    导出网表 + 仿真前检查，不跑求解器
+  end note
+  note right of sim_diag
+    汇总网表检查、sim_report、log
+  end note
+  note right of sim_tol
+    blocks.yaml tolerances +
+    environment / mix：
+    LHS 或 adaptive 批跑，
+    yield、灵敏度、surrogate
+  end note
+}
+
+package "gate" {
+  component "report" as gate_rep
+  note right of gate_rep
+    metrics vs spec；
+    operating_point vs valid_range；
+    实测 vs 仿真 RMSE；
+    --stress-sweep 可选
+  end note
+}
+
+package "kicad" {
+  component "sim-fields" as kicad_sf
+  note right of kicad_sf
+    当前后端：KiCad .kicad_sch
+    文本方式写 Sim.Library/Name/Pins
+  end note
+}
+
+package "agent / mcp" {
+  component "tools" as ag_t
+  component "call" as ag_c
+  component "mcp serve" as mcp_s
+  note right of mcp_s
+    stdio MCP；与 CLI 共用 dispatch
+  end note
+}
+
+map_sync -[hidden]down-> pipe_sync
+pipe_sync -[hidden]down-> w_once
+w_once --> sim_run : 默认串联
+sim_run --> gate_rep
+lab_char ..> map_sync : 更新仿真模型与指标数据后
+m_build ..> map_sync : 同上
+
+@enduml

@@ -8,15 +8,26 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from benchgate.gate.report import write_gate_report
+from benchgate.gate.report import load_sim_report_context, write_gate_report
+from benchgate.io.blocks_config import has_tolerance_study
 from benchgate.mapping.engine import mapping_status, sync_project
+from benchgate.paths import benchgate_paths
 from benchgate.pipeline.local_blocks import sync_local_blocks
+from benchgate.rules.loader import default_rule_pack_paths
 from benchgate.sim.pipeline import run_project_sim
+from benchgate.watch.auto_capture import run_auto_capture
 
 
 WATCH_GLOBS = ("*.kicad_sch", "*.kicad_pro", "*.kicad_pcb")
 PIPELINE_FILES = ("models/blocks.yaml",)
-BLOCK_FILE_SUFFIXES = (".net", ".cir", ".asc", ".metrics.json")
+BLOCK_FILE_SUFFIXES = (".net", ".cir", ".asc")
+
+
+def _is_pipeline_block_file(path: Path) -> bool:
+    name = path.name.lower()
+    if name.endswith(".metrics.json"):
+        return True
+    return path.suffix.lower() in BLOCK_FILE_SUFFIXES
 
 
 @dataclass
@@ -56,7 +67,7 @@ def pipeline_files(design_dir: Path) -> list[Path]:
     blocks_dir = design_dir / "models" / "blocks"
     if blocks_dir.is_dir():
         for path in blocks_dir.rglob("*"):
-            if path.is_file() and path.suffix.lower() in BLOCK_FILE_SUFFIXES:
+            if path.is_file() and _is_pipeline_block_file(path):
                 files.append(path)
     return sorted(files)
 
@@ -96,6 +107,7 @@ def watch_once(
     reports_dir: Path,
     state_path: Path,
     sim_profile_path: Path | None = None,
+    profile: str = "default",
     subckt_dir: Path,
     global_models_dir: Path,
     blocks_yaml: Path | None = None,
@@ -103,6 +115,13 @@ def watch_once(
     run_pipeline: bool = True,
     run_sim: bool = True,
     run_gate: bool = True,
+    run_auto_capture: bool = True,
+    auto_capture_dry_run: bool = False,
+    run_tolerance: bool = True,
+    tolerance_samples: int = 200,
+    tolerance_strategy: str = "auto",
+    tolerance_seed: int = 42,
+    tolerance_jobs: int = 4,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
     operating_point: dict = {}
@@ -133,26 +152,89 @@ def watch_once(
     status = mapping_status(manifest)
     result["mapping_status"] = status
 
+    if run_auto_capture and status.get("pending"):
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
+        result["auto_capture"] = run_auto_capture(
+            design_dir,
+            manifest,
+            models_dir=models_dir,
+            lab_config=paths.lab_config,
+            instruments_config=paths.instruments,
+            dry_run=auto_capture_dry_run,
+        )
+
     sim_dir = reports_dir / "sim"
+    stress_sweep_path: Path | None = None
     if run_sim and not status.get("unmapped"):
         report, _ = run_project_sim(
             design_dir,
             manifest_path,
             sim_dir,
             sim_profile_path=sim_profile_path,
+            profile=profile,
         )
         result["sim"] = report.to_dict()
 
+        if sim_profile_path:
+            from benchgate.sim.profile import load_profile_block
+            from benchgate.sim.stress_sweep import run_stress_sweep
+
+            block = load_profile_block(sim_profile_path, profile)
+            if block.get("stress_sweep") and block.get("stress"):
+                sweep_dir = reports_dir / "stress_sweep"
+                sweep_report = run_stress_sweep(
+                    design_dir,
+                    manifest_path,
+                    sweep_dir,
+                    sim_profile_path=sim_profile_path,
+                    profile=profile,
+                )
+                result["stress_sweep"] = sweep_report.to_dict()
+                stress_sweep_path = Path(sweep_report.report_path) if sweep_report.report_path else None
+
+    mc_tolerance_path: Path | None = None
+    blocks_path = blocks_yaml or (design_dir / "models" / "blocks.yaml")
+    if run_tolerance and not status.get("unmapped") and blocks_path.is_file() and has_tolerance_study(blocks_path):
+        from benchgate.sim.tolerance import run_tolerance_study
+
+        tol_dir = reports_dir / "mc_tolerance"
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
+        tol_report = run_tolerance_study(
+            design_dir,
+            manifest_path,
+            tol_dir,
+            blocks_yaml=blocks_path,
+            sim_profile_path=sim_profile_path or paths.sim_profile,
+            profile=profile,
+            n_samples=tolerance_samples,
+            seed=tolerance_seed,
+            strategy=tolerance_strategy,
+            jobs=tolerance_jobs,
+        )
+        result["tolerance"] = tol_report.to_dict()
+        mc_tolerance_path = Path(tol_report.report_path) if tol_report.report_path else None
+
     if run_gate:
         gate_path = reports_dir / "gate_report.json"
+        sim_report = sim_dir / "sim_report.json"
+        op = operating_point or None
+        if sim_report.exists():
+            inferred_op, _ = load_sim_report_context(sim_report)
+            if inferred_op and not op:
+                op = inferred_op
+        paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
         gate = write_gate_report(
             manifest_path,
             gate_path,
             captured_dir=models_dir / "captured",
             sim_raw_path=sim_dir / "sim_waveform.csv" if sim_dir.exists() else None,
-            operating_point=operating_point or None,
+            operating_point=op,
+            sim_report_path=sim_report if sim_report.exists() else None,
+            stress_sweep_path=stress_sweep_path,
+            monte_carlo_path=mc_tolerance_path,
+            rule_pack_paths=default_rule_pack_paths(home=paths.home, design=design_dir),
         )
         result["gate"] = gate.to_dict()
-        result["operating_point"] = operating_point
+        result["operating_point"] = op
 
     return result

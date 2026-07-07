@@ -39,15 +39,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "design_dir": {"type": "string", "description": "Path to KiCad project folder"},
                 "kicad_key": {"type": "string"},
                 "reference": {"type": "string"},
-                "provider": {"type": "string", "enum": ["ltspice"], "description": "Model source (default: ltspice)"},
-                "source_file": {"type": "string", "description": "Path to .net/.cir netlist"},
-                "sim_name": {"type": "string", "description": "Subckt name to emit"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["ltspice", "datasheet", "bench", "vendor"],
+                    "description": "Model source (default: ltspice)",
+                },
+                "source_file": {"type": "string", "description": "Path to .net/.cir netlist (ltspice)"},
+                "lib_path": {"type": "string", "description": "Path to vendor/bench .lib"},
+                "sim_name": {"type": "string", "description": "Subckt/model name to emit"},
+                "mpn": {"type": "string", "description": "MPN for datasheet provider"},
+                "from_meas": {
+                    "type": "string",
+                    "description": "Path to LTspice/ngspice .MEAS log; parsed into provenance.metrics",
+                },
                 "pins": {"type": "string", "description": "External pins (space-separated); required to wrap a flat netlist"},
                 "valid_range": {"type": "object", "description": "Operating-range assumptions (ports/freq/temp/bias)"},
                 "metrics": {"type": "object", "description": "Achieved performance metrics {name: value} from the local sim"},
                 "notes": {"type": "string"},
             },
-            "required": ["design_dir", "kicad_key", "source_file", "sim_name"],
+            "required": ["design_dir", "kicad_key"],
         },
     },
     "spec_set": {
@@ -196,8 +206,25 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_dir": {"type": "string"},
                 "profile": {"type": "string"},
+                "fail_on_preflight": {
+                    "type": "boolean",
+                    "description": "Abort before ngspice when preflight reports errors",
+                },
             },
             "required": ["design_dir"],
+        },
+    },
+    "sim_stress_sweep": {
+        "description": "Run profile stress_sweep grid and aggregate worst-case component stress",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "manifest_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "profile": {"type": "string"},
+            },
+            "required": ["design_dir", "profile"],
         },
     },
     "sim_sweep": {
@@ -248,6 +275,8 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "object",
                     "description": "Actual operating point (e.g. {vsupply_v, temp_c, freq_hz}) checked against each model's valid_range",
                 },
+                "stress_sweep": {"type": "boolean", "description": "Run profile stress_sweep first"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block for stress_sweep"},
             },
             "required": ["design_dir"],
         },
@@ -274,9 +303,92 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block (default default)"},
                 "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
                 "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
                 "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
+                "run_auto_capture": {
+                    "type": "boolean",
+                    "description": "Trigger lab capture for pending subckt entries (default true)",
+                },
+                "auto_capture_dry_run": {"type": "boolean", "description": "List candidates only"},
+                "run_tolerance": {
+                    "type": "boolean",
+                    "description": "Run sim tolerance when blocks.yaml has tolerances (default true)",
+                },
+                "tolerance_samples": {"type": "integer", "description": "MC sample budget (default 200)"},
+                "tolerance_strategy": {
+                    "type": "string",
+                    "enum": ["lhs", "adaptive", "sequential"],
+                    "description": "Tolerance strategy when auto-run (default adaptive)",
+                },
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "sim_diagnose": {
+        "description": "Summarize simulation preflight/report/log into actionable diagnostics",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "sim_tolerance": {
+        "description": (
+            "LHS/adaptive/sequential Monte Carlo over blocks.yaml tolerances, environment, "
+            "and mix (multi-provider); writes reports/mc_tolerance/mc_tolerance.json"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block (default charge_pump)"},
+                "n_samples": {"type": "integer", "description": "Sample budget (default 200)"},
+                "seed": {"type": "integer", "description": "RNG seed (default 42)"},
+                "strategy": {
+                    "type": "string",
+                    "enum": ["lhs", "adaptive", "sequential", "auto"],
+                    "description": "Sampling strategy (default lhs); auto = sequential + parallel + coarse/fine",
+                },
+                "warmup_ratio": {"type": "number", "description": "Adaptive warmup fraction (default 0.25)"},
+                "surrogate_degree": {"type": "integer", "description": "Polynomial surrogate degree (default 2)"},
+                "sequential_batch": {"type": "integer"},
+                "sequential_ci_width": {"type": "number"},
+                "sequential_min_samples": {"type": "integer"},
+                "jobs": {"type": "integer", "description": "Parallel workers (0=cpu_count-1)"},
+                "sim_tier": {"type": "string", "enum": ["auto", "coarse", "fine"]},
+                "tran_step": {"type": "string"},
+                "tran_stop": {"type": "string"},
+                "maxstep": {"type": "string"},
+                "output_dir": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "watch_loop": {
+        "description": (
+            "Continuous watch: poll KiCad + blocks.yaml; on change run pipeline → mapping → sim → gate"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "profile": {"type": "string"},
+                "interval_s": {"type": "number", "description": "Poll interval seconds (default 2)"},
+                "debounce_s": {"type": "number", "description": "Wait after change before next poll (default 1)"},
+                "max_iterations": {"type": "integer", "description": "Stop after N polls (0 = until interrupted)"},
+                "run_pipeline": {"type": "boolean"},
+                "run_sim": {"type": "boolean"},
+                "run_gate": {"type": "boolean"},
+                "run_auto_capture": {"type": "boolean"},
+                "auto_capture_dry_run": {"type": "boolean"},
+                "run_tolerance": {"type": "boolean"},
+                "tolerance_samples": {"type": "integer"},
+                "tolerance_strategy": {"type": "string", "enum": ["lhs", "adaptive", "sequential", "auto"]},
+                "tolerance_jobs": {"type": "integer", "description": "Parallel MC workers (0=auto)"},
             },
             "required": ["design_dir"],
         },

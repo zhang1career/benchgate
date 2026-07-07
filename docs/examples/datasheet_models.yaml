@@ -1,0 +1,18 @@
+# Approximate ngspice .model parameters from manufacturer datasheets / public libraries.
+# Used by DatasheetModelProvider (RFC §2.1 ModelSource.DATASHEET).
+
+1N4001:
+  element: D
+  params: IS=14.11n RS=0.2818 BV=75 IBV=10u CJO=4.096p M=0.3333 N=1.875 TT=4.32u
+
+1N4007:
+  element: D
+  params: IS=76.9n RS=42.0m BV=1000 IBV=5.00u CJO=39.0p M=1.11 N=1.45 TT=5.7u
+
+SS8050:
+  element: NPN
+  params: IS=1.4E-14 BF=200 NF=1 VAF=100 IKF=0.5 ISE=0 BR=5 CJE=15P CJC=8P TF=5N TR=50N RC=0.5 RE=0.3
+
+SS8550:
+  element: PNP
+  params: IS=1.4E-14 BF=200 NF=1 VAF=100 IKF=0.5 ISE=0 BR=5 CJE=15P CJC=8P TF=5N TR=50N RC=0.5 RE=0.3

@@ -32,7 +32,7 @@ ngspice 与 LTspice 同时运行、在分区边界每步交换电压/电流。**
 
 用他源工具（LTspice、数据手册、厂商库……）**离线**表征某个子块，产出便携模型工件（拟合/导出的 subckt `.lib`），注入全局 ngspice 网表当 `X` 器件。子块只被离线跑一次生成模型，**全局仿真始终是纯 ngspice**。
 
-这正是 benchgate 现有链路对**台架实测**在做的事（`lab/fit` → `models/subckt/*.lib` → `manifest` → `sim`）。本 RFC 只是把「模型工件的来源」从「bench 实测」泛化为「任意 provider」。
+这正是 benchgate 现有链路对**实验室实测**在做的事（`lab/fit` → `models/subckt/*.lib` → `manifest` → `sim`）。本 RFC 只是把「模型工件的来源」从 `source=BENCH` 泛化为「任意 provider」。
 
 ```mermaid
 flowchart TB
@@ -46,7 +46,7 @@ flowchart TB
     DS["数据手册 / vendor"]
   end
 
-  subgraph spine ["共享脊柱"]
+  subgraph spine ["共用验证"]
     PROV[ModelProvider]
     LIB[(subckt/*.lib)]
     MAN[(manifest<br/>+ provenance)]
@@ -273,7 +273,7 @@ M1–M4 打通的是**自底向上**的一条腿：局部表征 → 模型工件
 2. 按 spec 驱动局部设计与表征（LTspice、**实验室**等自底向上工具）；
 3. 表征产出 **metrics**，经 manifest → ngspice → **gate** 与 spec 比对。
 
-**实验室**是闭环的测量基础（Session → fit → metrics），不是与自顶向下并列的「另一条路径」；台架与 LTspice 均为自底向上的表征手段。
+**实验室**是闭环的测量基础（Session → fit → metrics），不是与自顶向下并列的「另一条路径」；实验室实测与 LTspice 均为自底向上的表征手段。
 
 ### 10.2 三个正交概念（务必区分，避免语义混淆）
 
@@ -298,7 +298,7 @@ metrics: dict[str, float] = field(default_factory=dict)  # 实际达成指标（
 - `spec` 用与 `valid_range` 相同的扁平闭区间 `{name: [min, max]}`（开区间 `null`/`.inf`），复用同一套校验逻辑。
 - `metrics` 是**规格比对的规范面**：无论来源（bench/ltspice/datasheet）都往这里写。bench 流程把关键 `measured.params` 同步进 `metrics`；`measured` 仍保留原始明细。
 
-### 10.4 gate：spec vs metrics 门禁
+### 10.4 gate：spec 与 metrics 签核
 
 `gate/report.py` 新增（与 `check_valid_range` 同款区间逻辑）：
 
@@ -343,7 +343,7 @@ flowchart TB
     LTS["LTspice → .net<br/>pipeline sync"]
   end
 
-  subgraph spine ["共享脊柱"]
+  subgraph spine ["共用验证"]
     MAN[(manifest<br/>spec + provenance.metrics)]
     SIM[sim: ngspice 全局]
     GATE{gate}
@@ -374,4 +374,4 @@ flowchart TB
 - [x] `spec` 挂在 `ComponentMapping`、`metrics` 挂在 `ModelProvenance`（§10.2）。
 - [x] gate 中 spec 不达标为 **fail（硬）**，valid_range 越界为 **warn（软）**（§10.4）。
 - [x] metrics 支持直传、`metrics_file`、lab 同步；`--from-meas` 日志解析延后（§10.5）。
-- [x] 叙事对齐：**实验室为基础**，自顶向下 / 自底向上为两种设计方法，manifest → sim → gate 为共享脊柱（§10.1、§10.7）。
+- [x] 叙事对齐：**实验室为基础**，自顶向下 / 自底向上为两种设计方法，仿真模型与指标数据 → sim → 签核 为共用验证流程（§10.1、§10.7）。

@@ -1,0 +1,30 @@
+@startuml
+title charge-pump：伴随式验证示例
+skinparam shadowing false
+
+|设计|
+start
+:升压原理图定稿\n(用户精力在电路本身);
+
+|benchgate|
+:Agent 维护仿真模型与指标数据\n(NE555 / BJT / 二极管等);
+:watch loop 监听变更;
+
+|签核|
+:批跑 charge_pump profile;
+:指标检查 (如 VOUT);
+:应力扫描 (Ic / Pd / Tj);
+
+|留档|
+:reports/ 签核与仿真报告;
+:可选 lab Session 与仿真对照;
+
+|结论|
+if (签核通过?) then (是)
+  :进入布局 / 打样;
+else (否)
+  :diagnose + 调整设计;
+endif
+stop
+
+@enduml

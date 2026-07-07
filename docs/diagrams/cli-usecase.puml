@@ -1,0 +1,243 @@
+@startuml
+title 业务问题与 benchgate 工作流程
+skinparam shadowing false
+skinparam linetype ortho
+skinparam roundcorner 8
+skinparam usecase {
+  BackgroundColor #FEFECE
+  BorderColor #A80036
+}
+
+' 整理说明（原 11 题 → 7 题）
+' 合并：指标预算+承诺交期 | 应力+失效认证 | 改图验证+改版成本 | 实验复现+争议审计
+' 归类：A 投板前(列1-3) · B 迭代样机(列4-5) · C 量产与追溯(列6-7)
+' 排序：按风险暴露时机，投板前 → 样机迭代 → 量产/组织
+' 完整 CLI 索引见 command-map.puml
+
+left to right direction
+
+' ── A 投板前：把风险拦在样机之前 ──
+
+together {
+  top to bottom direction
+  usecase "指标与交付承诺\n是否站得住？\n投板前有无依据支撑承诺？" as P1
+  rectangle spec #F7F7F7;line:666666 [
+    **spec set**
+    ----
+    写 performance budget
+    metric: [min, max]
+  ]
+  rectangle mst #F7F7F7;line:666666 [
+    **mapping status**
+    ----
+    ready / pending / unmapped，
+    模型是否就绪
+  ]
+  rectangle w1 #F7F7F7;line:666666 [
+    **watch once**
+    ----
+    pipeline → mapping → sim
+    → gate 全流程
+  ]
+  rectangle g1 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    metrics vs spec，
+    支撑指标与交期承诺
+  ]
+  P1 -down-> spec
+  spec -down-> mst
+  mst -down-> w1
+  w1 -down-> g1
+}
+
+together {
+  top to bottom direction
+  usecase "失效、应力与认证风险\n能否提前看见？\n过应力与认证证据能否量产前留档？" as P2
+  rectangle sim #F7F7F7;line:666666 [
+    **sim run**
+    ----
+    批跑 ngspice，
+    采集应力探针
+  ]
+  rectangle ss #F7F7F7;line:666666 [
+    **sim stress-sweep**
+    ----
+    扫描工况，
+    汇总最坏应力
+  ]
+  rectangle g2 #F7F7F7;line:666666 [
+    **gate report**
+    **--stress-sweep**
+    ----
+    应力 vs 降额签核；
+    非安规认证
+  ]
+  rectangle ms2 #F7F7F7;line:666666 [
+    **model status**
+    ----
+    模型来源与 valid_range，
+    追溯设计假设
+  ]
+  P2 -down-> sim
+  sim -down-> ss
+  ss -down-> g2
+  g2 -down-> ms2
+}
+
+together {
+  top to bottom direction
+  usecase "换料、多源、降本后\n承诺是否仍成立？\n替代料有验证而非碰运气？" as P3
+  rectangle mb #F7F7F7;line:666666 [
+    **model build**
+    **--provider vendor**
+    ----
+    备选料 subckt
+    登记 manifest
+  ]
+  rectangle blk_mix #F7F7F7;line:666666 [
+    **blocks.yaml mix**
+    ----
+    多源 provider 权重 +
+    model / 容差混批
+  ]
+  rectangle tol3 #F7F7F7;line:666666 [
+    **sim tolerance**
+    ----
+    mix 抽样批跑，
+    验证换料后 yield
+  ]
+  rectangle g3 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    yield + metrics
+    vs 规则包签核
+  ]
+  P3 -down-> mb
+  mb -down-> blk_mix
+  blk_mix -down-> tol3
+  tol3 -down-> g3
+}
+
+' ── B 迭代与样机：控制改版、查清问题 ──
+
+together {
+  top to bottom direction
+  usecase "改版后能否少打冤枉板、\n仍满足承诺？\n改图是解难还是无把握烧钱？" as P4
+  rectangle pf #F7F7F7;line:666666 [
+    **sim preflight**
+    ----
+    仿真前网表检查，
+    先拦低级问题
+  ]
+  rectangle wl #F7F7F7;line:666666 [
+    **watch loop**
+    ----
+    改图后自动回归
+  ]
+  rectangle g4 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    变更后签核留档，
+    避免盲改与重复打板
+  ]
+  P4 -down-> pf
+  pf -down-> wl
+  wl -down-> g4
+}
+
+together {
+  top to bottom direction
+  usecase "样机异常时能否\n快速分清责任？\n设计、物料、测试孰是孰非？" as P5
+  rectangle lc #F7F7F7;line:666666 [
+    **lab characterize**
+    ----
+    采波形拟合，
+    更新实测模型
+  ]
+  rectangle g5 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    实测 vs 仿真 RMSE，
+    定位偏差指标
+  ]
+  rectangle diag #F7F7F7;line:666666 [
+    **sim diagnose**
+    ----
+    汇总网表检查、log，
+    查预测侧问题
+  ]
+  P5 -down-> lc
+  lc -down-> g5
+  g5 -down-> diag
+}
+
+' ── C 量产与组织：一致性、可追溯 ──
+
+together {
+  top to bottom direction
+  usecase "可制造性与批次\n一致性？\n容差组合下指标会不会漂？" as P6
+  rectangle blk #F7F7F7;line:666666 [
+    **blocks.yaml**
+    ----
+    circuit_spec 预算 +
+    tolerances 容差定义
+  ]
+  rectangle tol #F7F7F7;line:666666 [
+    **sim tolerance**
+    ----
+    LHS 抽样批跑 ngspice，
+    统计 yield、灵敏度与 surrogate
+  ]
+  rectangle g6 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    yield vs 规则包签核，
+    报告留档
+  ]
+  P6 -down-> blk
+  blk -down-> tol
+  tol -down-> g6
+}
+
+together {
+  top to bottom direction
+  usecase "设计依据与实验记录\n能否长期复现、可审计？\n人员变动后能否调出签核与实测？" as P7
+  rectangle cap #F7F7F7;line:666666 [
+    **lab capture**
+    ----
+    波形与工况写入
+    captured/sessions/
+  ]
+  rectangle g7 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    签核结论写入
+    reports/ 留档
+  ]
+  rectangle lqs #F7F7F7;line:666666 [
+    **lab query sessions**
+    ----
+    按时间 / 元件查
+    历史 session
+  ]
+  rectangle lqm #F7F7F7;line:666666 [
+    **lab query metric**
+    ----
+    跨 session 指标
+    时间序列
+  ]
+  P7 -down-> cap
+  cap -down-> g7
+  g7 -down-> lqs
+  lqs -down-> lqm
+}
+
+P1 -[hidden]right- P2
+P2 -[hidden]right- P3
+P3 -[hidden]right- P4
+P4 -[hidden]right- P5
+P5 -[hidden]right- P6
+P6 -[hidden]right- P7
+
+@enduml

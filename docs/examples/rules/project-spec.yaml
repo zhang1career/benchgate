@@ -1,0 +1,38 @@
+id: project-spec
+version: 1
+source: design models/blocks.yaml circuit_spec
+applies_to:
+  - gate
+  - monte_carlo
+severity_default: fail
+
+rules:
+  - id: vout_avg
+    when: {}
+    limit:
+      type: check_metric
+      signal: v(vout)
+      metric: avg
+      min: 8
+      max: 26
+    severity: fail
+    evidence: sim_report.checks
+
+  - id: u1_out_pp
+    when: {}
+    limit:
+      type: check_metric
+      signal: v(net-_u1-out_)
+      metric: pp
+      min: 0.5
+      max: null
+    severity: fail
+    evidence: sim_report.checks
+
+  - id: mc_yield_95
+    when: {}
+    limit:
+      type: yield_gte
+      min_pct: 95.0
+    severity: warn
+    evidence: monte_carlo

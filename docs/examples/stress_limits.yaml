@@ -1,0 +1,32 @@
+# Default semiconductor stress limits for benchgate derating checks.
+# Keys are uppercase MPN / part value strings. Override per-design in profile stress.components.*.limits
+
+SS8050:
+  vceo: 25
+  vcbo: 40
+  vebo: 5
+  ic_max: 1.5
+  pd_max: 0.3
+  tj_max: 150
+  theta_ja: 350  # °C/W, SOT-23 free air (approximate)
+
+SS8550:
+  vceo: 25
+  vcbo: 40
+  vebo: 5
+  ic_max: 1.5
+  pd_max: 0.3
+  tj_max: 150
+  theta_ja: 350
+
+NE555:
+  vcc_max: 18
+  pd_max: 0.6
+
+1N4001:
+  vr_max: 50
+  if_avg: 1.0
+
+1N4007:
+  vr_max: 1000
+  if_avg: 1.0

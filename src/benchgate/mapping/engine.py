@@ -8,7 +8,7 @@ from pathlib import Path
 from benchgate.io.manifest import load_manifest, save_manifest
 from benchgate.kicad.project import KiCadProject, iter_symbols, symbol_key
 from benchgate.kicad.spice_fields import read_sim_fields
-from benchgate.schemas import ComponentMapping, MappingManifest, SpiceModelKind
+from benchgate.schemas import ComponentMapping, MappingManifest, ModelProvenance, SpiceModelKind
 
 LIB_RULES: list[tuple[str, SpiceModelKind]] = [
     (r"^Device:R$", SpiceModelKind.PASSIVE),
@@ -78,6 +78,20 @@ def mapping_status(manifest: MappingManifest) -> dict[str, list[str]]:
     return {"ready": ready, "pending": pending, "unmapped": unmapped}
 
 
+def build_model(
+    manifest: MappingManifest,
+    entry: ComponentMapping,
+    provider,
+    *,
+    workdir: Path,
+) -> ComponentMapping:
+    """Unified RFC provider entry: ``provider.build()`` → ``register_model()``."""
+    from benchgate.providers.base import register_model
+
+    artifact = provider.build(entry, workdir=workdir)
+    return register_model(manifest, entry, artifact)
+
+
 def apply_measured_model(
     manifest: MappingManifest,
     kicad_key: str,
@@ -86,16 +100,55 @@ def apply_measured_model(
     sim_name: str,
     sim_pins: str = "",
     measured_params: dict[str, float] | None = None,
+    provenance: ModelProvenance | None = None,
 ) -> ComponentMapping:
+    from benchgate.providers.bench import BenchModelProvider
+
     entry = manifest.find(kicad_key) or ComponentMapping(kicad_key=kicad_key)
-    entry.spice_kind = SpiceModelKind.SUBCKT
-    entry.sim_library = lib_path
-    entry.sim_name = sim_name
-    entry.sim_pins = sim_pins or None
-    if measured_params and entry.measured:
-        entry.measured.params.update(measured_params)
-    manifest.upsert(entry)
+    provider = BenchModelProvider(
+        lib_path=lib_path,
+        sim_name=sim_name,
+        sim_pins=sim_pins or None,
+        metrics=dict(measured_params or {}),
+    )
+    build_model(manifest, entry, provider, workdir=lib_path.parent)
+    if provenance:
+        entry.provenance = provenance
+        if measured_params and entry.provenance.measured:
+            entry.provenance.measured.params.update(measured_params)
+        manifest.upsert(entry)
     return entry
+
+
+def ensure_datasheet_models(
+    manifest: MappingManifest,
+    subckt_dir: Path,
+    *,
+    catalog_path: Path | None = None,
+) -> int:
+    """Build pending manifest entries that have a cataloged datasheet SPICE model."""
+    from benchgate.providers.datasheet import DatasheetModelProvider
+    from benchgate.sim.datasheet_catalog import load_datasheet_catalog, lookup_datasheet_model
+    from benchgate.sim.limits_catalog import enrich_manifest_limits, match_catalog_part
+
+    catalog = load_datasheet_catalog(catalog_path)
+    if not catalog:
+        return 0
+
+    built = 0
+    for entry in manifest.entries:
+        if entry.is_ready:
+            continue
+        value = str((entry.metadata or {}).get("value") or "")
+        mpn = match_catalog_part(value, catalog)
+        if not mpn or not lookup_datasheet_model(mpn, catalog):
+            continue
+        provider = DatasheetModelProvider(mpn=mpn, catalog_path=catalog_path)
+        build_model(manifest, entry, provider, workdir=subckt_dir)
+        built += 1
+    if built:
+        enrich_manifest_limits(manifest)
+    return built
 
 
 def sync_project(
@@ -118,5 +171,9 @@ def sync_project(
         manifest,
         subckt_dir=subckt_dir,
     )
+    from benchgate.sim.limits_catalog import enrich_manifest_limits
+
+    enrich_manifest_limits(manifest)
+    ensure_datasheet_models(manifest, subckt_dir)
     save_manifest(manifest, manifest_path, global_models_dir=global_base)
     return manifest

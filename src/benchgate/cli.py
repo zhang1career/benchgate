@@ -69,7 +69,7 @@ def _add_design_arg(parser: argparse.ArgumentParser, *, default: str = "design")
 
 
 def _paths(args: argparse.Namespace):
-    return benchgate_paths(args.design, manifest=args.manifest)
+    return benchgate_paths(args.design, manifest=getattr(args, "manifest", None))
 
 
 def cmd_mapping_sync(args: argparse.Namespace) -> int:
@@ -102,10 +102,45 @@ def cmd_sim_run(args: argparse.Namespace) -> int:
             "manifest_path": str(p.manifest),
             "output_dir": str(out_dir),
             "profile": args.profile,
+            "fail_on_preflight": args.fail_on_preflight,
         },
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result.get("success") else 1
+
+
+def cmd_sim_preflight(args: argparse.Namespace) -> int:
+    from benchgate.sim.pipeline import run_preflight_only
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "sim")
+    report = run_preflight_only(
+        p.design,
+        p.manifest,
+        out_dir,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+    )
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0 if report.get("passed") else 1
+
+
+def cmd_sim_stress_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.stress_sweep import run_stress_sweep
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "stress_sweep")
+    report = run_stress_sweep(
+        p.design,
+        p.manifest,
+        out_dir,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+    )
+    payload = report.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    worst = payload.get("worst") or {}
+    return 0 if worst.get("passed", False) else 1
 
 
 def cmd_sim_sweep(args: argparse.Namespace) -> int:
@@ -139,6 +174,43 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sim_diagnose(args: argparse.Namespace) -> int:
+    result = dispatch("sim_diagnose", {"design_dir": args.design})
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_sim_tolerance(args: argparse.Namespace) -> int:
+    from benchgate.sim.tolerance import run_tolerance_study
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "mc_tolerance")
+    report = run_tolerance_study(
+        p.design,
+        p.manifest,
+        out_dir,
+        blocks_yaml=p.blocks_yaml,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+        n_samples=args.samples,
+        seed=args.seed,
+        strategy=args.strategy,
+        warmup_ratio=args.warmup_ratio,
+        surrogate_degree=args.surrogate_degree,
+        sequential_batch=args.sequential_batch,
+        sequential_ci_width=args.sequential_ci_width,
+        sequential_min_samples=args.sequential_min_samples,
+        jobs=args.jobs,
+        sim_tier=args.sim_tier,
+        tran_step=args.tran_step,
+        tran_stop=args.tran_stop,
+        maxstep=args.maxstep,
+    )
+    payload = report.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_sim_cosim(args: argparse.Namespace) -> int:
     p = _paths(args)
     out_dir = resolve_project_path(p.design, args.out, p.reports / "sim_cosim")
@@ -156,12 +228,64 @@ def cmd_sim_cosim(args: argparse.Namespace) -> int:
 
 
 def cmd_watch_once(args: argparse.Namespace) -> int:
-    params: dict = {"design_dir": args.design, "run_sim": not args.no_sim}
+    params: dict = {
+        "design_dir": args.design,
+        "run_sim": not args.no_sim,
+        "profile": args.profile,
+    }
     if args.no_pipeline:
         params["run_pipeline"] = False
     if args.no_gate:
         params["run_gate"] = False
+    if args.no_auto_capture:
+        params["run_auto_capture"] = False
+    if args.auto_capture_dry_run:
+        params["auto_capture_dry_run"] = True
+    if args.no_tolerance:
+        params["run_tolerance"] = False
+    if getattr(args, "tolerance_strategy", None):
+        params["tolerance_strategy"] = args.tolerance_strategy
+    if getattr(args, "tolerance_samples", None):
+        params["tolerance_samples"] = args.tolerance_samples
+    if getattr(args, "tolerance_jobs", None) is not None:
+        params["tolerance_jobs"] = args.tolerance_jobs
     result = dispatch("watch_once", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_watch_loop(args: argparse.Namespace) -> int:
+    from benchgate.paths import benchgate_paths
+    from benchgate.watch.loop import watch_loop
+
+    p = benchgate_paths(args.design)
+    state_path = p.state
+    max_iter = args.max_iterations if args.max_iterations > 0 else None
+    result = watch_loop(
+        p.design,
+        manifest_path=p.manifest,
+        models_dir=p.models,
+        reports_dir=p.reports,
+        state_path=state_path,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+        subckt_dir=p.subckt,
+        global_models_dir=p.global_models,
+        blocks_yaml=p.blocks_yaml,
+        tmp_dir=p.tmp_root / "pipeline",
+        run_pipeline=not args.no_pipeline,
+        run_sim=not args.no_sim,
+        run_gate=not args.no_gate,
+        run_auto_capture=not args.no_auto_capture,
+        auto_capture_dry_run=args.auto_capture_dry_run,
+        run_tolerance=not args.no_tolerance,
+        tolerance_samples=args.tolerance_samples,
+        tolerance_strategy=args.tolerance_strategy,
+        tolerance_jobs=args.tolerance_jobs,
+        interval_s=args.interval,
+        debounce_s=args.debounce,
+        max_iterations=max_iter,
+    )
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
 
@@ -180,8 +304,33 @@ def cmd_gate_report(args: argparse.Namespace) -> int:
         params["sim_raw_path"] = str(resolve_project_path(p.design, args.sim_raw, p.reports / "sim" / "sim_waveform.csv"))
     if args.operating_point:
         params["operating_point"] = json.loads(args.operating_point)
+    if args.stress_sweep:
+        params["stress_sweep"] = True
+        params["profile"] = args.profile
+    if getattr(args, "rules", "auto") == "none":
+        params["rules"] = "none"
     result = dispatch("gate_report", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_kicad_sim_fields(args: argparse.Namespace) -> int:
+    from benchgate.kicad.sim_fields_safe import apply_sim_fields_safe
+
+    p = _paths(args)
+    sch = resolve_project_path(p.design, args.schematic, p.design / f"{p.design.name}.kicad_sch")
+    if not sch.exists():
+        for candidate in p.design.glob("*.kicad_sch"):
+            sch = candidate
+            break
+    changed = apply_sim_fields_safe(
+        sch,
+        args.reference,
+        sim_library=args.library,
+        sim_name=args.sim_name,
+        sim_pins=args.pins or "",
+    )
+    print(json.dumps({"schematic": str(sch), "reference": args.reference, "updated": changed}, indent=2))
     return 0
 
 
@@ -324,9 +473,17 @@ def cmd_model_build(args: argparse.Namespace) -> int:
         "design_dir": args.design,
         "kicad_key": args.kicad_key,
         "provider": args.provider,
-        "source_file": args.source_file,
-        "sim_name": args.sim_name,
     }
+    if args.source_file:
+        params["source_file"] = args.source_file
+    if args.sim_name:
+        params["sim_name"] = args.sim_name
+    if args.mpn:
+        params["mpn"] = args.mpn
+    if args.from_meas:
+        params["from_meas"] = args.from_meas
+    if args.lib:
+        params["lib_path"] = args.lib
     if args.reference:
         params["reference"] = args.reference
     if args.pins:
@@ -376,6 +533,13 @@ def cmd_agent_call(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp_serve(_: argparse.Namespace) -> int:
+    from benchgate.mcp_server import main as mcp_main
+
+    mcp_main()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from benchgate.instruments.errors import CapabilityError, ConfigError, InstrumentError
 
@@ -406,7 +570,30 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     sr.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
     sr.add_argument("--profile", default="default")
+    sr.add_argument(
+        "--fail-on-preflight",
+        action="store_true",
+        help="Abort before ngspice when preflight reports errors",
+    )
     sr.set_defaults(func=cmd_sim_run)
+    spf = sim_sub.add_parser(
+        "preflight",
+        help="Export/prepare netlist and run preflight checks without ngspice",
+    )
+    _add_design_arg(spf)
+    spf.add_argument("--manifest", default=None, help="Override manifest path")
+    spf.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim)")
+    spf.add_argument("--profile", default="default")
+    spf.set_defaults(func=cmd_sim_preflight)
+    ssw = sim_sub.add_parser(
+        "stress-sweep",
+        help="Sweep profile stress_sweep axes and aggregate worst-case component stress",
+    )
+    _add_design_arg(ssw)
+    ssw.add_argument("--manifest", default=None, help="Override manifest path")
+    ssw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/stress_sweep)")
+    ssw.add_argument("--profile", default="default")
+    ssw.set_defaults(func=cmd_sim_stress_sweep)
     sw = sim_sub.add_parser(
         "sweep",
         help="Run a profile over a grid of param/component overrides; collect one metric per point",
@@ -427,6 +614,65 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_cosim)")
     sc.add_argument("--profile", default="hbridge_pwm_closed")
     sc.set_defaults(func=cmd_sim_cosim)
+    sd = sim_sub.add_parser(
+        "diagnose",
+        help="Summarize preflight/sim_report/ngspice.log into actionable findings",
+    )
+    _add_design_arg(sd)
+    sd.set_defaults(func=cmd_sim_diagnose)
+    stol = sim_sub.add_parser(
+        "tolerance",
+        help="LHS tolerance study over blocks.yaml tolerances (Monte Carlo M1)",
+    )
+    _add_design_arg(stol)
+    stol.add_argument("--manifest", default=None, help="Override manifest path")
+    stol.add_argument("--out", default=None, help="Output directory (default: reports/mc_tolerance)")
+    stol.add_argument("--profile", default="charge_pump")
+    stol.add_argument("--samples", type=int, default=200, help="LHS sample count (default 200)")
+    stol.add_argument("--seed", type=int, default=42)
+    stol.add_argument(
+        "--strategy",
+        choices=["lhs", "adaptive", "sequential", "auto"],
+        default="lhs",
+        help="lhs | adaptive | sequential (CI stop) | auto (sequential+parallel+coarse/fine)",
+    )
+    stol.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.25,
+        help="Fraction of samples for adaptive warmup phase (default 0.25)",
+    )
+    stol.add_argument("--surrogate-degree", type=int, default=2, help="Surrogate poly degree (1=linear, 2=default)")
+    stol.add_argument("--sequential-batch", type=int, default=25, help="Batch size for --strategy sequential")
+    stol.add_argument("--sequential-ci-width", type=float, default=5.0, help="Stop when Wilson yield CI width <= pct")
+    stol.add_argument("--sequential-min-samples", type=int, default=50, help="Min samples before sequential stop")
+    stol.add_argument(
+        "--jobs",
+        type=int,
+        default=4,
+        help="Parallel workers (0=cpu_count-1, default 4)",
+    )
+    stol.add_argument(
+        "--sim-tier",
+        choices=["auto", "coarse", "fine"],
+        default=None,
+        help="Transient preset tier (default from blocks.yaml / profile)",
+    )
+    stol.add_argument("--tran-step", default=None, help="Override coarse/fine tran step (e.g. 2u)")
+    stol.add_argument("--tran-stop", default=None, help="Override tran stop (e.g. 35m)")
+    stol.add_argument("--maxstep", default=None, help="Override .options maxstep")
+    stol.set_defaults(func=cmd_sim_tolerance)
+
+    p_kicad = sub.add_parser("kicad", help="KiCad schematic utilities (KiCad 10-safe)")
+    kicad_sub = p_kicad.add_subparsers(dest="kicad_cmd", required=True)
+    ks = kicad_sub.add_parser("sim-fields", help="Set Sim.Library/Name/Pins via text edit (no Schematic.save)")
+    _add_design_arg(ks)
+    ks.add_argument("--reference", required=True, help="Component reference, e.g. U1")
+    ks.add_argument("--library", required=True, help="Sim.Library path")
+    ks.add_argument("--sim-name", dest="sim_name", required=True, help="Sim.Name subckt/model name")
+    ks.add_argument("--pins", default="", help="Sim.Pins pin map")
+    ks.add_argument("--schematic", default=None, help="Override .kicad_sch path")
+    ks.set_defaults(func=cmd_kicad_sim_fields)
 
     p_watch = sub.add_parser("watch", help="Agent pipeline: blocks.yaml + KiCad change triggers")
     watch_sub = p_watch.add_subparsers(dest="watch_cmd", required=True)
@@ -440,7 +686,42 @@ def main(argv: list[str] | None = None) -> int:
     wo.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
     wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
     wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
+    wo.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
+    wo.add_argument(
+        "--auto-capture-dry-run",
+        action="store_true",
+        help="List pending auto-capture candidates without calling lab",
+    )
+    wo.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
+    wo.add_argument("--tolerance-strategy", default="auto", choices=["lhs", "adaptive", "sequential", "auto"])
+    wo.add_argument("--tolerance-samples", type=int, default=200)
+    wo.add_argument("--tolerance-jobs", type=int, default=4, help="Parallel MC workers (0=auto)")
+    wo.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
     wo.set_defaults(func=cmd_watch_once)
+    wl = watch_sub.add_parser(
+        "loop",
+        help="Continuously watch KiCad/blocks changes and run watch_once pipeline",
+    )
+    _add_design_arg(wl)
+    wl.add_argument("--no-sim", action="store_true", help="Skip ngspice batch sim")
+    wl.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
+    wl.add_argument("--no-gate", action="store_true", help="Skip gate report")
+    wl.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
+    wl.add_argument("--auto-capture-dry-run", action="store_true", help="Dry-run auto capture only")
+    wl.add_argument("--no-tolerance", action="store_true", help="Skip sim tolerance when blocks.yaml defines tolerances")
+    wl.add_argument("--tolerance-strategy", default="auto", choices=["lhs", "adaptive", "sequential", "auto"])
+    wl.add_argument("--tolerance-samples", type=int, default=200)
+    wl.add_argument("--tolerance-jobs", type=int, default=4, help="Parallel MC workers (0=auto)")
+    wl.add_argument("--profile", default="default", help="sim_profiles.yaml block name")
+    wl.add_argument("--interval", type=float, default=2.0, help="Seconds between polls (default 2)")
+    wl.add_argument("--debounce", type=float, default=1.0, help="Extra wait after a change batch (default 1)")
+    wl.add_argument(
+        "--max-iterations",
+        type=int,
+        default=0,
+        help="Stop after N polls (0 = run until interrupted)",
+    )
+    wl.set_defaults(func=cmd_watch_loop)
 
     p_pipeline = sub.add_parser("pipeline", help="Agent automation from models/blocks.yaml")
     pipeline_sub = p_pipeline.add_subparsers(dest="pipeline_cmd", required=True)
@@ -465,6 +746,18 @@ def main(argv: list[str] | None = None) -> int:
         dest="operating_point",
         default=None,
         help='JSON of actual operating point for valid_range checks, e.g. \'{"vsupply_v":5.0,"temp_c":25}\'',
+    )
+    gr.add_argument(
+        "--stress-sweep",
+        action="store_true",
+        help="Run profile stress_sweep before writing gate report",
+    )
+    gr.add_argument("--profile", default="default", help="sim_profiles.yaml block for stress_sweep")
+    gr.add_argument(
+        "--rules",
+        choices=["auto", "none"],
+        default="auto",
+        help="Rule packs for sign-off: auto=corp-derating + design models/rules (default auto)",
     )
     gr.set_defaults(func=cmd_gate_report)
 
@@ -537,14 +830,22 @@ def main(argv: list[str] | None = None) -> int:
 
     p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
     model_sub = p_model.add_subparsers(dest="model_cmd", required=True)
-    mb = model_sub.add_parser("build", help="Build an ngspice subckt from a .net/.cir and register it")
+    mb = model_sub.add_parser("build", help="Build an ngspice model from a provider source and register it")
     _add_design_arg(mb)
     mb.add_argument("--kicad-key", dest="kicad_key", required=True)
     mb.add_argument("--reference", default=None)
-    mb.add_argument("--provider", default="ltspice", choices=["ltspice"])
-    mb.add_argument("--from", dest="source_file", required=True, help="LTspice-exported .net/.cir netlist")
-    mb.add_argument("--sim-name", dest="sim_name", required=True, help="Subckt name to emit")
-    mb.add_argument("--pins", default=None, help="External pins, space-separated (required to wrap a flat netlist)")
+    mb.add_argument("--provider", default="ltspice", choices=["ltspice", "datasheet", "bench", "vendor"])
+    mb.add_argument("--from", dest="source_file", default=None, help="LTspice-exported .net/.cir (ltspice provider)")
+    mb.add_argument("--lib", default=None, help="Vendor/bench .lib path (vendor/bench provider)")
+    mb.add_argument("--sim-name", dest="sim_name", default=None, help="Subckt/model name to emit")
+    mb.add_argument("--mpn", default=None, help="MPN for datasheet provider (default: manifest value)")
+    mb.add_argument(
+        "--from-meas",
+        dest="from_meas",
+        default=None,
+        help="Parse LTspice/ngspice .MEAS log into provenance.metrics (merged with --metrics)",
+    )
+    mb.add_argument("--pins", default=None, help="External pins, space-separated (ltspice flat netlist wrap)")
     mb.add_argument(
         "--valid-range",
         dest="valid_range",
@@ -584,6 +885,11 @@ def main(argv: list[str] | None = None) -> int:
     ac.add_argument("tool")
     ac.add_argument("--params", default="{}", help="JSON object")
     ac.set_defaults(func=cmd_agent_call)
+
+    p_mcp = sub.add_parser("mcp", help="Model Context Protocol server (stdio)")
+    mcp_sub = p_mcp.add_subparsers(dest="mcp_cmd", required=True)
+    msrv = mcp_sub.add_parser("serve", help="Run MCP server on stdio exposing agent tools")
+    msrv.set_defaults(func=cmd_mcp_serve)
 
     args = parser.parse_args(argv)
     try:
