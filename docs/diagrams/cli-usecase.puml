@@ -1,89 +1,157 @@
 @startuml
-title 业务问题与 benchgate 操作流程
-left to right direction
+title 业务问题与 benchgate 工作流程
 skinparam shadowing false
 skinparam linetype ortho
-skinparam nodesep 40
-skinparam ranksep 14
-skinparam packageStyle rectangle
+skinparam roundcorner 8
 skinparam usecase {
   BackgroundColor #FEFECE
   BorderColor #A80036
 }
-skinparam usecase<<cmd>> {
-  BackgroundColor #F7F7F7
-  BorderColor #666666
-}
-skinparam usecase<<na>> {
-  BackgroundColor #EEEEEE
-  BorderColor #AAAAAA
-  FontColor #888888
-}
-hide stereotype
 
-actor "硬件工程师" as Eng
+' 六列水平并排；每列顶部=业务问题，其下=命令自上而下
+' 完整 CLI 索引见 command-map.puml
 
-package "业务问题" {
+left to right direction
+
+together {
+  top to bottom direction
   usecase "功能/非功能指标\n预算是否成立？" as P1
+  rectangle spec #F7F7F7;line:666666 [
+    **spec set**
+    ----
+    写 performance budget
+    metric: [min, max]
+  ]
+  rectangle pipe #F7F7F7;line:666666 [
+    **pipeline sync**
+    ----
+    读取 blocks.yaml，构建 subckt，
+    写入 spec 与 metrics 到 manifest
+  ]
+  rectangle w1 #F7F7F7;line:666666 [
+    **watch once**
+    ----
+    检测原理图 / blocks 变更，
+    串联 pipeline → mapping → sim
+  ]
+  rectangle g1 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    比对 metrics 与 spec，
+    产出签核报告
+  ]
+  P1 -down-> spec
+  spec -down-> pipe
+  pipe -down-> w1
+  w1 -down-> g1
+}
+
+together {
+  top to bottom direction
   usecase "可制造性、\n产品一致性？" as P2
+  rectangle na #EEEEEE;line:AAAAAA;text:888888 [
+    **暂不覆盖**
+    ----
+    后续版本讨论
+  ]
+  P2 -down-> na
+}
+
+together {
+  top to bottom direction
   usecase "电气应力与\n安全裕量？" as P3
+  rectangle sim #F7F7F7;line:666666 [
+    **sim run**
+    ----
+    导出网表并批跑 ngspice，
+    采集 checks 与应力探针
+  ]
+  rectangle ss #F7F7F7;line:666666 [
+    **sim stress-sweep**
+    ----
+    扫描工作点 / 负载条件，
+    汇总应力随参数变化
+  ]
+  rectangle g3 #F7F7F7;line:666666 [
+    **gate report**
+    **--stress-sweep**
+    ----
+    比对 operating_point 与
+    valid_range；非安规认证
+  ]
+  P3 -down-> sim
+  sim -down-> ss
+  ss -down-> g3
+}
+
+together {
+  top to bottom direction
   usecase "实物异常时\n如何分析？" as P4
+  rectangle lc #F7F7F7;line:666666 [
+    **lab characterize**
+    ----
+    采实测波形并拟合，
+    更新 subckt 与 manifest
+  ]
+  rectangle g4 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    比对实测与仿真 RMSE，
+    定位偏差指标
+  ]
+  rectangle diag #F7F7F7;line:666666 [
+    **sim diagnose**
+    ----
+    汇总网表检查、sim_report、
+    log，查预测侧问题
+  ]
+  P4 -down-> lc
+  lc -down-> g4
+  g4 -down-> diag
+}
+
+together {
+  top to bottom direction
   usecase "改图后验证\n是否仍有效？" as P5
+  rectangle wl #F7F7F7;line:666666 [
+    **watch loop**
+    ----
+    持续监听原理图 / blocks，
+    变更后自动跑全流程
+  ]
+  rectangle g5 #F7F7F7;line:666666 [
+    **gate report**
+    ----
+    每次变更后重新签核，
+    报告留档于 reports/
+  ]
+  P5 -down-> wl
+  wl -down-> g5
+}
+
+together {
+  top to bottom direction
   usecase "实验数据如何\n复现与审计？" as P6
+  rectangle cap #F7F7F7;line:666666 [
+    **lab capture**
+    ----
+    将波形与工况写入
+    captured/sessions/
+  ]
+  rectangle lq #F7F7F7;line:666666 [
+    **lab query**
+    ----
+    按 session / metric / drift
+    查询历史实测记录
+  ]
+  P6 -down-> cap
+  cap -down-> lq
 }
 
-package "benchgate 命令" {
-  usecase "pipeline sync\nwatch once\ngate report" as S1 <<cmd>>
-  usecase "暂不覆盖" as S2 <<na>>
-  usecase "sim stress-sweep\ngate report\n--stress-sweep" as S3 <<cmd>>
-  usecase "lab characterize\ngate report\nsim diagnose" as S4 <<cmd>>
-  usecase "watch loop\ngate report" as S5 <<cmd>>
-  usecase "lab capture\nlab query" as S6 <<cmd>>
-}
-
-P1 -right-> S1
-P2 -right-> S2
-P3 -right-> S3
-P4 -right-> S4
-P5 -right-> S5
-P6 -right-> S6
-
-P1 -[hidden]down- P2
-P2 -[hidden]down- P3
-P3 -[hidden]down- P4
-P4 -[hidden]down- P5
-P5 -[hidden]down- P6
-
-S1 -[hidden]down- S2
-S2 -[hidden]down- S3
-S3 -[hidden]down- S4
-S4 -[hidden]down- S5
-S5 -[hidden]down- S6
-
-Eng -right-> P3
-P3 -[hidden]up- P1
-P3 -[hidden]down- P6
-
-note bottom of S1
-  blocks.yaml / spec set
-  → gate_report.json
-end note
-
-note bottom of S2
-  后续版本讨论
-end note
-
-note bottom of S3
-  器件应力与降额，非安规认证
-end note
-
-note bottom of S4
-  captured/sessions/
-  实测 vs 仿真 RMSE
-end note
-
-note bottom of S6
-  models/captured/sessions/
-end note
+P1 -[hidden]right- P2
+P2 -[hidden]right- P3
+P3 -[hidden]right- P4
+P4 -[hidden]right- P5
+P5 -[hidden]right- P6
 
 @enduml

@@ -441,7 +441,6 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir = resolve_project_path(p.design, out_dir, p.reports / "sim_sweep")
         elif not args.get("output_dir"):
             out_dir = p.reports / "sim_sweep"
-
         def norm(d: dict | None) -> dict[str, list[str]]:
             return {k: [str(x) for x in v] for k, v in (d or {}).items()}
 

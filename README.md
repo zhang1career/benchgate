@@ -67,7 +67,7 @@ benchgate watch loop --design <工程目录> --profile <profile名>
 
 | 文件 | 内容 |
 |------|------|
-| [cli-usecase.puml](docs/diagrams/cli-usecase.puml) | 业务问题 ↔ benchgate 命令 |
+| [cli-usecase.puml](docs/diagrams/cli-usecase.puml) | 业务问题 → 命令流程（每步含说明） |
 | [workflow-cases.puml](docs/diagrams/workflow-cases.puml) | 设计过程中后台跟跑 |
 | [command-map.puml](docs/diagrams/command-map.puml) | CLI 索引 |
 | [case-charge-pump.puml](docs/diagrams/case-charge-pump.puml) | charge-pump 示例 |
