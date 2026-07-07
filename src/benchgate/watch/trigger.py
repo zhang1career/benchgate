@@ -18,7 +18,14 @@ from benchgate.watch.auto_capture import run_auto_capture
 
 WATCH_GLOBS = ("*.kicad_sch", "*.kicad_pro", "*.kicad_pcb")
 PIPELINE_FILES = ("models/blocks.yaml",)
-BLOCK_FILE_SUFFIXES = (".net", ".cir", ".asc", ".metrics.json")
+BLOCK_FILE_SUFFIXES = (".net", ".cir", ".asc")
+
+
+def _is_pipeline_block_file(path: Path) -> bool:
+    name = path.name.lower()
+    if name.endswith(".metrics.json"):
+        return True
+    return path.suffix.lower() in BLOCK_FILE_SUFFIXES
 
 
 @dataclass
@@ -58,7 +65,7 @@ def pipeline_files(design_dir: Path) -> list[Path]:
     blocks_dir = design_dir / "models" / "blocks"
     if blocks_dir.is_dir():
         for path in blocks_dir.rglob("*"):
-            if path.is_file() and path.suffix.lower() in BLOCK_FILE_SUFFIXES:
+            if path.is_file() and _is_pipeline_block_file(path):
                 files.append(path)
     return sorted(files)
 

@@ -1,0 +1,89 @@
+@startuml
+title 业务问题与 benchgate 操作流程
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 40
+skinparam ranksep 14
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor #FEFECE
+  BorderColor #A80036
+}
+skinparam usecase<<cmd>> {
+  BackgroundColor #F7F7F7
+  BorderColor #666666
+}
+skinparam usecase<<na>> {
+  BackgroundColor #EEEEEE
+  BorderColor #AAAAAA
+  FontColor #888888
+}
+hide stereotype
+
+actor "硬件工程师" as Eng
+
+package "业务问题" {
+  usecase "功能/非功能指标\n预算是否成立？" as P1
+  usecase "可制造性、\n产品一致性？" as P2
+  usecase "电气应力与\n安全裕量？" as P3
+  usecase "实物异常时\n如何分析？" as P4
+  usecase "改图后验证\n是否仍有效？" as P5
+  usecase "实验数据如何\n复现与审计？" as P6
+}
+
+package "benchgate 命令" {
+  usecase "pipeline sync\nwatch once\ngate report" as S1 <<cmd>>
+  usecase "暂不覆盖" as S2 <<na>>
+  usecase "sim stress-sweep\ngate report\n--stress-sweep" as S3 <<cmd>>
+  usecase "lab characterize\ngate report\nsim diagnose" as S4 <<cmd>>
+  usecase "watch loop\ngate report" as S5 <<cmd>>
+  usecase "lab capture\nlab query" as S6 <<cmd>>
+}
+
+P1 -right-> S1
+P2 -right-> S2
+P3 -right-> S3
+P4 -right-> S4
+P5 -right-> S5
+P6 -right-> S6
+
+P1 -[hidden]down- P2
+P2 -[hidden]down- P3
+P3 -[hidden]down- P4
+P4 -[hidden]down- P5
+P5 -[hidden]down- P6
+
+S1 -[hidden]down- S2
+S2 -[hidden]down- S3
+S3 -[hidden]down- S4
+S4 -[hidden]down- S5
+S5 -[hidden]down- S6
+
+Eng -right-> P3
+P3 -[hidden]up- P1
+P3 -[hidden]down- P6
+
+note bottom of S1
+  blocks.yaml / spec set
+  → gate_report.json
+end note
+
+note bottom of S2
+  后续版本讨论
+end note
+
+note bottom of S3
+  器件应力与降额，非安规认证
+end note
+
+note bottom of S4
+  captured/sessions/
+  实测 vs 仿真 RMSE
+end note
+
+note bottom of S6
+  models/captured/sessions/
+end note
+
+@enduml

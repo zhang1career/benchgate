@@ -1,0 +1,36 @@
+@startuml
+title 伴随式验证（用户改图，benchgate 跟跑）
+skinparam shadowing false
+
+start
+
+:用户编辑原理图\n或子电路/指标配置;
+
+partition "benchgate（后台）" {
+  :Agent / watch 检测变更;
+
+  :汇集仿真模型\n(原厂 / 手册 / 实测 / 局部仿真);
+
+  :更新仿真模型与指标数据\n(manifest.yaml);
+
+  :批跑仿真\n+ 可选应力扫描;
+
+  :签核报告\n(指标 · 裕量 · 实测对比);
+}
+
+partition "产出留档" {
+  :reports/\n(sim · gate · stress_sweep);
+
+  :captured/sessions/\n(实测);
+}
+
+if (签核通过?) then (是)
+  :用户继续设计\n或进入样机阶段;
+  stop
+else (否)
+  :sim diagnose\n或查阅 Session 对照;
+  :修改电路、预算或补实测;
+  stop
+endif
+
+@enduml

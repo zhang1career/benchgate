@@ -30,7 +30,7 @@ class BoardConfig:
         return 1.0 / self.ctrl_loop_hz
 
 
-_DEFINE_RE = re.compile(r"^#define\s+(\w+)\s+([\d.]+)(?:f|U)?\s*(?://.*)?$")
+_DEFINE_RE = re.compile(r"^#define\s+(\w+)\s+([\d.]+)[fU]?\s*(?://.*)?$")
 _DEFINE_EXPR_RE = re.compile(
     r"^#define\s+(\w+)\s+\(\(([\d.]+)f?\s*\+\s*([\d.]+)f?\)\s*/\s*([\d.]+)f?\)"
 )
