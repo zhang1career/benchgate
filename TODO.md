@@ -2,7 +2,7 @@
 
 项目级待办（Agent / 维护者）。架构与里程碑见 `docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md`、`docs/MINIMUM_SCOPE.md`。
 
-**测试基线**：`pytest`（当前 156+ tests）
+**测试基线**：`pytest`（当前 175+ tests）
 
 ---
 
@@ -37,6 +37,8 @@
 - [x] **连接器 preflight** — J* / `Connector:` → info `connector_dropped`（charge-pump 已验）
 - [x] **KiCad 10 安全 Sim.\*** — `kicad sim-fields`（文本编辑，不用 `Schematic.save()`）
 - [x] **`sim tolerance` M1–M3** — LHS/adaptive/sequential、环境轴、mix 多 provider、surrogate
+- [x] **`sim tolerance` M4** — 并行 `--jobs`、`strategy auto`、粗→细 `tolerance_sim`、块级 MC 分层
+- [x] **`blocks validate`** — CLI `benchgate blocks validate`；MC 前校验 YAML / 路径 / transient 窗口
 
 ---
 
@@ -47,6 +49,7 @@
 - [x] **pipeline / blocks** — `tests/test_pipeline.py`
 - [x] **providers / vendor / auto_capture / diagnose** — 单元测覆盖
 - [x] **tolerance M1–M3** — `tests/test_tolerance.py`、`tests/test_tolerance_m3.py`
+- [x] **tolerance M4 / blocks validate** — `test_tolerance_batch.py`、`test_tolerance_sim.py`、`test_tolerance_layers.py`、`test_blocks_validate.py`
 - [ ] **真实 KiCad 工程 fixture** — 绑 `design/myboard` 或 charge-pump 跑 sim（CI 需 KiCad + ngspice）
 - [ ] **`.asc` → netlist** — 有 LTspice/Wine 时的可选集成测（CI skip）
 - [ ] **auto_capture 实机** — 实验室仪器 + `lab.yaml` 端到端（非 dry-run）
@@ -56,11 +59,11 @@
 ## 文档 / 元数据
 
 - [x] **README 重构** — 根本问题（仿真被忽视）+ 业务问题对照表 + PlantUML
-- [x] **可制造性 / 产品一致性** — M1–M3 `sim tolerance` + watch/MCP 接入；见 RFC_RULES_AND_TOLERANCE.md
+- [x] **可制造性 / 产品一致性** — M1–M4 `sim tolerance` + watch/MCP 接入；见 RFC_RULES_AND_TOLERANCE.md
 - [x] **P3 换料多源** — cli-usecase.puml：`model build` → `blocks.yaml mix` → `sim tolerance` → `gate report`
+- [x] **P6 blocks validate** — command-map / cli-usecase / README 报告对比（diff·jq）
 - [ ] **RFC §4 实现对照表** — 与当前 providers / CLI 对齐（MINIMUM_SCOPE §8 已部分对齐）
 - [ ] **`pyproject.toml` description`** — 反映自顶向下 / 自底向上 / blocks.yaml
-- [ ] **MINIMUM_SCOPE.md** — §8 工具表 / §7.5 watch 已对齐；§11 竞品表可择机更新
 
 ---
 

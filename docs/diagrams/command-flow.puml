@@ -1,0 +1,52 @@
+@startuml
+title watch once 默认串联（可逐项 --no-* 跳过）
+skinparam shadowing false
+skinparam linetype ortho
+skinparam roundcorner 8
+skinparam activity {
+  BackgroundColor #F7F7F7
+  BorderColor #666666
+}
+
+start
+
+if (有 blocks.yaml?) then (是)
+  :pipeline sync\nsubckt + spec + metrics;
+else (否)
+endif
+
+:mapping sync\n扫描原理图 → manifest;
+
+if (auto_capture 启用?) then (是)
+  :pending 元件 → lab characterize;
+else (否)
+endif
+
+if (--no-sim?) then (否)
+  :sim run\nngspice 批跑;
+  if (profile 含 stress_sweep?) then (是)
+    :stress_sweep;
+  endif
+  if (blocks 定义 tolerances\n且未 --no-tolerance?) then (是)
+    :sim tolerance;
+  endif
+else (是)
+endif
+
+if (--no-gate?) then (否)
+  :gate report\n→ gate_report.json;
+else (是)
+endif
+
+stop
+
+note right
+  单独排查失败：
+  **sim diagnose**
+  单独签核应力：
+  **gate report --stress-sweep**
+  长跑 MC 前：
+  **blocks validate**
+end note
+
+@enduml

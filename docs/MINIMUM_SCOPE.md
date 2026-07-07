@@ -115,7 +115,7 @@ flowchart TB
 | 手工挂载厂商 SPICE 模型、Pin 映射 GUI | KiCad Simulation Model Editor | 内置 |
 | 无源 R/C/L 自动生成 SPICE | KiCad 符号 Value | 内置 |
 | ERC / DRC / BOM / Gerber | `kicad-cli` 或 kicad-mcp-pro | 成熟 |
-| 可制造性、批次一致性评估 | `sim tolerance`（LHS/adaptive、环境轴、mix 混批、surrogate）→ `gate report` yield 规则 | **已覆盖**（M1–M3） |
+| 可制造性、批次一致性评估 | `sim tolerance`（LHS/adaptive/sequential/auto、并行、粗→细、块级 MC、环境轴、mix）→ `gate report` yield 规则 | **已覆盖**（M1–M4） |
 | Agent 加符号、拉线、改 PCB、布局 | kicad-mcp-pro / kicad-tools | 生态已有 |
 | 符号库搜索、LCSC 询价 | kicad-mcp-pro `lib_*` | 非 benchgate 目标 |
 | FreeRouting  autoroute | kicad-mcp-pro `route_*` | 非 benchgate 目标 |
@@ -384,11 +384,14 @@ benchgate watch once
   → mapping sync（kicad-tools 读符号 + Sim.*；ensure_datasheet_models）
   → auto_capture（可选：pending SUBCKT → lab_capture；models/auto_capture.yaml）
   → sim run（kicad-cli export netlist -f spice → fixup/preflight → ngspice -b）
+  → sim tolerance（可选：blocks.yaml 含 tolerances/environment；默认 strategy auto · jobs 4）
   → stress_sweep（profile 启用 stress_sweep 时）
-  → gate report（spec + valid_range + RMSE [+ stress_sweep 摘要]）
+  → gate report（spec + valid_range + RMSE [+ mc_tolerance yield] [+ stress_sweep 摘要]）
 ```
 
-跳过开关：`--no-pipeline` · `--no-sim` · `--no-gate` · `--no-auto-capture` · `--auto-capture-dry-run`。
+长跑 MC 前建议：**`benchgate blocks validate --design <dir> --profile <name>`**（校验路径、`tolerance_sim.tran_stop` vs `window_after`、MC 分层）。报告对比见 [README](../README.md)「报告对比与日常巡检」一节。
+
+跳过开关：`--no-pipeline` · `--no-sim` · `--no-gate` · `--no-tolerance` · `--no-auto-capture` · `--auto-capture-dry-run` · `--tolerance-strategy` · `--tolerance-jobs` · `--tolerance-samples`。
 
 故障排查：**`benchgate sim diagnose`** — 汇总 preflight / sim_report / ngspice.log。
 
@@ -423,7 +426,7 @@ benchgate MCP 示例：[docs/examples/cursor-mcp.json](../examples/cursor-mcp.js
 ## 8. benchgate 自有 Agent 工具（最小集）
 
 CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgate sim run` ↔ `sim_run`，等。  
-完整命令地图见 [README](../README.md) · PlantUML：[docs/diagrams/command-map.puml](../diagrams/command-map.puml)。
+完整命令索引见 [CLI_REFERENCE.md](CLI_REFERENCE.md) · PlantUML：[command-tree.puml](diagrams/command-tree.puml) · [command-flow.puml](diagrams/command-flow.puml)。
 
 工具按闭环层次分组（不暴露 PCB 布线 → kicad-mcp-pro）。
 
@@ -446,7 +449,8 @@ CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgat
 |------|-----|------|
 | `spec_set` | `spec set` | 性能预算 `{metric: [min, max]}` |
 | `pipeline_sync` | `pipeline sync` | `blocks.yaml` → subckt + spec/metrics |
-| `watch_once` | `watch once` | 变更 → pipeline → mapping → sim → gate |
+| — | `blocks validate` | 校验 `blocks.yaml`（CLI only；长跑 MC 前） |
+| `watch_once` | `watch once` | 变更 → pipeline → mapping → sim [→ tolerance] → gate |
 | `watch_loop` | `watch loop` | 持续监听 + debounce |
 
 **自底向上**
@@ -467,7 +471,8 @@ CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgat
 | `sim_sweep` | `sim sweep` | 参数扫描 |
 | `sim_cosim` | `sim cosim` | 固件 cosim（进阶） |
 | `sim_diagnose` | `sim diagnose` | preflight / report / log  actionable 摘要 |
-| `gate_report` | `gate report` | spec · valid_range · RMSE；可选 `--stress-sweep` |
+| `sim_tolerance` | `sim tolerance` | MC：lhs/adaptive/sequential/auto；`--jobs`；粗→细；块级层 |
+| `gate_report` | `gate report` | spec · valid_range · RMSE · rules；可选 `--stress-sweep` |
 
 **MCP**
 
@@ -498,7 +503,7 @@ blocks:
     valid_range: {vsupply_v: [4.5, 5.5]}
 ```
 
-CLI：`benchgate pipeline sync` · Agent：`pipeline_sync` · 编排：`benchgate watch once` / `watch loop`（`--no-*` 可跳过步骤）。
+CLI：`benchgate pipeline sync` · `benchgate blocks validate` · Agent：`pipeline_sync` · 编排：`benchgate watch once` / `watch loop`（`--no-*` 可跳过步骤）。
 
 watch 监听范围：`*.kicad_sch` · `*.kicad_pro` · `*.kicad_pcb` · `models/blocks.yaml` · `models/blocks/*.{net,cir,asc,*.metrics.json}`。
 

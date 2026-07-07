@@ -20,7 +20,7 @@ benchgate 跟着设计工程运行：用户画原理图、定指标；系统在�
 | **电气应力与安全裕量** | `stress-sweep`、profile 应力探针（器件/电路级，非安规认证） | **已覆盖** |
 | **实物异常时对照分析** | 实测 Session、实测 vs 预测 RMSE、`sim diagnose` | **部分覆盖** |
 | **实验复现与审计** | `captured/sessions/`、`lab query` | **已覆盖** |
-| **可制造性、批次一致性** | `blocks.yaml` 容差 + 环境/mix + `sim tolerance`（LHS/adaptive + surrogate）→ `gate report` | **已覆盖**（M1–M3） |
+| **可制造性、批次一致性** | `blocks validate` + `blocks.yaml` 容差/环境/mix + `sim tolerance`（auto/并行/粗→细）→ `gate report` | **已覆盖**（M1–M4） |
 
 用例图：[cli-usecase.puml](docs/diagrams/cli-usecase.puml)。
 
@@ -52,6 +52,8 @@ benchgate 跟着设计工程运行：用户画原理图、定指标；系统在�
 benchgate watch loop --design <工程目录> --profile <profile名>
 ```
 
+默认在 `blocks.yaml` 含 tolerances 时跑 MC：`--tolerance-strategy auto`、`--tolerance-jobs 4`。长跑前建议 `benchgate blocks validate`。
+
 单次全流程：`benchgate watch once`。
 
 ### 手段（实现层，非用户目标本身）
@@ -69,7 +71,9 @@ benchgate watch loop --design <工程目录> --profile <profile名>
 |------|------|
 | [cli-usecase.puml](docs/diagrams/cli-usecase.puml) | 7 个业务问题（整理自 11 题）→ 命令流程 |
 | [workflow-cases.puml](docs/diagrams/workflow-cases.puml) | 设计过程中后台跟跑 |
-| [command-map.puml](docs/diagrams/command-map.puml) | CLI 索引 |
+| [command-tree.puml](docs/diagrams/command-tree.puml) | CLI 命令树（mindmap） |
+| [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全部叶子命令说明 |
+| [command-flow.puml](docs/diagrams/command-flow.puml) | `watch once` 默认串联 |
 | [case-charge-pump.puml](docs/diagrams/case-charge-pump.puml) | charge-pump 示例 |
 
 ---
@@ -115,6 +119,7 @@ benchgate gate report --design design/myboard
 
 ```bash
 DESIGN=/path/to/charge-pump/pcb
+benchgate blocks validate --design $DESIGN --profile charge_pump
 benchgate watch loop --design $DESIGN --profile charge_pump
 benchgate sim diagnose --design $DESIGN
 ```
@@ -125,10 +130,41 @@ benchgate sim diagnose --design $DESIGN
 
 ## CLI 索引
 
-[command-map.puml](docs/diagrams/command-map.puml) · [MINIMUM_SCOPE §8](docs/MINIMUM_SCOPE.md#8-benchgate-自有-agent-工具最小集)
+[command-tree.puml](docs/diagrams/command-tree.puml) · [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) · [command-flow.puml](docs/diagrams/command-flow.puml) · [MINIMUM_SCOPE §8](docs/MINIMUM_SCOPE.md#8-benchgate-自有-agent-工具最小集)
 
 ```
-mapping · pipeline · watch · model · spec · lab · sim · gate · kicad · agent · mcp
+mapping · sim · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · mcp
+```
+
+### 报告对比与日常巡检（命令行即可）
+
+benchgate 刻意不增加 `gate diff`、`spec list` 等子命令；以下用系统自带的 `diff`、`jq` 即可。
+
+**签核报告两次改版之间有什么变化**
+
+```bash
+diff -u pcb/reports/gate_report.prev.json pcb/reports/gate_report.json
+jq '.summary.rules' pcb/reports/gate_report.json
+```
+
+**Monte Carlo 两次跑数的 yield 与样本数**
+
+```bash
+jq '{n:.n_samples, yield:.yield_pct, ci_lo:.yield_ci_low_pct, ci_hi:.yield_ci_high_pct}' \
+  pcb/reports/mc_tolerance/run_200.log \
+  pcb/reports/mc_tolerance/run_200_auto_j4_ci2.json
+```
+
+**manifest 里哪些元件还缺模型**
+
+```bash
+yq '.entries[] | select(.status != "ready") | .reference' pcb/models/manifest.yaml
+```
+
+**长跑 MC 前先校验 blocks.yaml**
+
+```bash
+benchgate blocks validate --design pcb --profile charge_pump
 ```
 
 ---
@@ -181,6 +217,7 @@ pytest && ruff check src tests
 
 | 路径 | 内容 |
 |------|------|
+| [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全部叶子命令说明 |
 | [MINIMUM_SCOPE.md](docs/MINIMUM_SCOPE.md) | 职责边界 |
 | [RFC ModelProvider](docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md) | Provider 协议 |
 | [TODO.md](TODO.md) | 待办 |

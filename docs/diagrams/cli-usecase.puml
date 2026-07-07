@@ -12,7 +12,7 @@ skinparam usecase {
 ' 合并：指标预算+承诺交期 | 应力+失效认证 | 改图验证+改版成本 | 实验复现+争议审计
 ' 归类：A 投板前(列1-3) · B 迭代样机(列4-5) · C 量产与追溯(列6-7)
 ' 排序：按风险暴露时机，投板前 → 样机迭代 → 量产/组织
-' 完整 CLI 索引见 command-map.puml
+' 完整 CLI 索引见 command-tree.puml · CLI_REFERENCE.md
 
 left to right direction
 
@@ -183,11 +183,17 @@ together {
     circuit_spec 预算 +
     tolerances 容差定义
   ]
+  rectangle blk_val #F7F7F7;line:666666 [
+    **blocks validate**
+    ----
+    MC 前校验 YAML、
+    路径与 transient 窗口
+  ]
   rectangle tol #F7F7F7;line:666666 [
     **sim tolerance**
     ----
-    LHS 抽样批跑 ngspice，
-    统计 yield、灵敏度与 surrogate
+    auto / sequential / parallel；
+    粗→细 transient；yield、灵敏度
   ]
   rectangle g6 #F7F7F7;line:666666 [
     **gate report**
@@ -196,7 +202,8 @@ together {
     报告留档
   ]
   P6 -down-> blk
-  blk -down-> tol
+  blk -down-> blk_val
+  blk_val -down-> tol
   tol -down-> g6
 }
 

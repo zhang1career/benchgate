@@ -3,7 +3,8 @@
 #
 # Agent / watch workflow (fully automated):
 #   1. Edit blocks.yaml (spec budget) and drop blocks/*.net (LTspice export)
-#   2. benchgate pipeline sync   OR   benchgate watch once
+#   2. benchgate blocks validate   (optional, before MC / tolerance)
+#   3. benchgate pipeline sync   OR   benchgate watch once
 #   → subckt built, manifest updated, gate checks spec vs metrics
 #
 # .asc sources require LTspice (or Wine) + spicelib; prefer .net on macOS headless.
