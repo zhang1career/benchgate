@@ -22,8 +22,9 @@ CLI_DESCRIPTION = (
 
 DOCS_EPILOG = """\
 documentation (in the benchgate install / source tree):
+  docs/CLI_REFERENCE.md     all leaf commands (29)
+  docs/diagrams/command-tree.puml   CLI mindmap
   README.md                 workflows (top-down / bottom-up)
-  docs/examples/blocks.yaml local block automation
   docs/MINIMUM_SCOPE.md     architecture and agent tools"""
 
 DESIGN_ARG_HELP = (
@@ -36,6 +37,7 @@ DESIGN_ARG_HELP = (
 ROOT_EPILOG = f"""\
 examples:
   benchgate mapping sync --design /path/to/myboard
+  benchgate blocks validate --design /path/to/myboard
   benchgate watch once --design /path/to/myboard
   benchgate pipeline sync --design /path/to/myboard
 
@@ -294,6 +296,20 @@ def cmd_pipeline_sync(args: argparse.Namespace) -> int:
     result = dispatch("pipeline_sync", {"design_dir": args.design})
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
     return 0
+
+
+def cmd_blocks_validate(args: argparse.Namespace) -> int:
+    from benchgate.io.blocks_validate import validate_blocks_yaml
+
+    p = _paths(args)
+    report = validate_blocks_yaml(
+        p.design,
+        p.blocks_yaml,
+        sim_profile_path=p.sim_profile,
+        profile=args.profile,
+    )
+    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    return 0 if report.ok else 1
 
 
 def cmd_gate_report(args: argparse.Namespace) -> int:
@@ -733,6 +749,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_design_arg(ps)
     ps.set_defaults(func=cmd_pipeline_sync)
+
+    p_blocks = sub.add_parser("blocks", help="Validate models/blocks.yaml before MC or pipeline")
+    blocks_sub = p_blocks.add_subparsers(dest="blocks_cmd", required=True)
+    bv = blocks_sub.add_parser(
+        "validate",
+        help="Check blocks.yaml schema, paths, MC layers, and tolerance_sim vs metric windows",
+    )
+    _add_design_arg(bv)
+    bv.add_argument("--profile", default="default", help="sim_profiles.yaml block for check fallback")
+    bv.set_defaults(func=cmd_blocks_validate)
 
     p_gate = sub.add_parser("gate", help="Bench vs sim quality")
     gate_sub = p_gate.add_subparsers(dest="gate_cmd", required=True)

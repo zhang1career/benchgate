@@ -1,0 +1,45 @@
+@startmindmap
+' CLI 命令树（结构索引）
+' 逐条说明见 docs/CLI_REFERENCE.md；默认串联见 command-flow.puml
+skinparam shadowing false
+skinparam monochrome false
+
+* benchgate
+left side
+** 共用验证
+*** mapping sync\n扫描原理图 → manifest
+*** mapping status\nready / pending / unmapped
+*** sim run\nkicad-cli → ngspice -b
+*** sim preflight\n网表检查，不跑求解器
+*** sim stress-sweep\n扫描应力轴，最坏情况
+*** sim sweep\n参数网格 + 单指标
+*** sim diagnose\n汇总 preflight / report / log
+*** sim tolerance\nblocks 容差 MC（lhs/adaptive/…）
+*** sim cosim\n固件闭环 cosim
+*** gate report\nspec · valid_range · RMSE · rules
+** 编排
+*** pipeline sync\nblocks.yaml → subckt + spec
+*** blocks validate\n校验 blocks.yaml（MC 前）
+*** watch once\npipeline → mapping → sim → gate
+*** watch loop\n持续 poll + debounce
+right side
+** 实验室
+*** lab list\n仪器与角色绑定
+*** lab read\n标量读数（默认 dmm）
+*** lab capture\nscope 波形 → Session
+*** lab characterize\n采波形 + 拟合 → subckt
+*** lab query sessions\n历史 Session
+*** lab query metric\n跨会话指标序列
+*** lab query drift\n指标漂移趋势
+*** lab query waveform\n导出 Session 波形
+** 模型与预算
+*** model build\nprovider → subckt + provenance
+*** model status\nsource / valid_range / spec
+*** spec set\nperformance budget
+** 元工具
+*** kicad sim-fields\n写 Sim.Library/Name/Pins
+*** agent tools\nAgent 工具 JSON schema
+*** agent call\n调试单工具 dispatch
+*** mcp serve\nstdio MCP 暴露工具
+
+@endmindmap
