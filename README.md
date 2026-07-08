@@ -22,7 +22,11 @@ benchgate 跟着设计工程运行：用户画原理图、定指标；系统在�
 | **实验复现与审计** | `captured/sessions/`、`lab query` | **已覆盖** |
 | **可制造性、批次一致性** | `blocks validate` + `blocks.yaml` 容差/环境/mix + `sim tolerance`（auto/并行/粗→细）→ `gate report` | **已覆盖**（M1–M4） |
 
-用例图：[cli-usecase.puml](docs/diagrams/cli-usecase.puml)。
+用例图：
+
+![业务问题与 benchgate 工作流程](docs/diagrams/cli-usecase.svg)
+
+（[PlantUML 源码](docs/diagrams/cli-usecase.puml)）
 
 ### 用语
 
@@ -69,7 +73,7 @@ benchgate watch loop --design <工程目录> --profile <profile名>
 
 | 文件 | 内容 |
 |------|------|
-| [cli-usecase.puml](docs/diagrams/cli-usecase.puml) | 7 个业务问题（整理自 11 题）→ 命令流程 |
+| [cli-usecase.svg](docs/diagrams/cli-usecase.svg)（[源码](docs/diagrams/cli-usecase.puml)） | 7 个业务问题（整理自 11 题）→ 命令流程 |
 | [workflow-cases.puml](docs/diagrams/workflow-cases.puml) | 设计过程中后台跟跑 |
 | [command-tree.puml](docs/diagrams/command-tree.puml) | CLI 命令树（mindmap） |
 | [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全部叶子命令说明 |
