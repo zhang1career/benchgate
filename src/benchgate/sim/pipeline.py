@@ -145,6 +145,33 @@ def run_project_sim(
     )
     report_path = output_dir / "sim_report.json"
     report_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+
+    if result.raw_output and sim_profile_path:
+        from benchgate.bench_compare import export_sim_waveforms, load_merged_compare_specs
+
+        compare_specs = load_merged_compare_specs(
+            manifest,
+            sim_profile_path=sim_profile_path,
+            profile=profile,
+        )
+        if not compare_specs:
+            checks = load_profile_checks(sim_profile_path, profile)
+            if checks:
+                first = checks[0]
+                signal = str(first.get("expr") or first.get("signal") or "")
+                if signal:
+                    from benchgate.bench_compare import BenchCompareSpec
+
+                    compare_specs = [
+                        BenchCompareSpec(
+                            id="primary",
+                            signal=signal,
+                            sim_metric=str(first.get("metric", "avg")),
+                        )
+                    ]
+        if compare_specs:
+            export_sim_waveforms(result.raw_output, compare_specs, output_dir)
+
     return report, result
 
 

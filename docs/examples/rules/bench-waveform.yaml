@@ -1,0 +1,25 @@
+id: bench-waveform
+version: 1
+source: gate_report waveform_comparison (built-in warn/fail thresholds overridable here)
+applies_to:
+  - gate
+severity_default: fail
+
+rules:
+  - id: waveform_rmse_board
+    when: {}
+    limit:
+      type: waveform_rmse_lte
+      max_v: 0.2
+      probe_id: vout
+    severity: fail
+    evidence: gate_report.comparisons
+
+  - id: waveform_correlation_board
+    when: {}
+    limit:
+      type: correlation_gte
+      min: 0.8
+      probe_id: vout
+    severity: warn
+    evidence: gate_report.comparisons

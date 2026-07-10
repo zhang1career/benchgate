@@ -336,6 +336,33 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "diagnose": {
+        "description": (
+            "Unified diagnosis: sim preflight/log + gate spec/waveform + lab sessions "
+            "with design/material/test_setup attribution"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "gate_report_path": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_compare_waveforms": {
+        "description": "Compare one bench session waveform against a sim CSV (RMSE, correlation)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "session_id": {"type": "string"},
+                "sim_csv": {"type": "string", "description": "Path under reports/sim/ or absolute"},
+                "bench_channel": {"type": "string", "description": "Default scope_ch1"},
+            },
+            "required": ["design_dir", "session_id", "sim_csv"],
+        },
+    },
     "sim_tolerance": {
         "description": (
             "LHS/adaptive/sequential Monte Carlo over blocks.yaml tolerances, environment, "

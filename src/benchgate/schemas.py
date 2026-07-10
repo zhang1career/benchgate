@@ -79,6 +79,7 @@ class ComponentMapping:
     sim_pins: str | None = None
     provenance: ModelProvenance | None = None
     spec: dict[str, Any] | None = None  # top-down performance budget {metric: [min, max]}
+    bench_compare: list[dict[str, Any]] | None = None  # per-entry probe overrides
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

@@ -18,7 +18,6 @@ from benchgate.lab.store import LabDataStore
 from benchgate.mapping.engine import apply_measured_model, mapping_status, sync_project
 from benchgate.paths import benchgate_paths, resolve_project_path
 from benchgate.schemas import ComponentMapping, MappingManifest, ModelProvenance, ModelSource
-from benchgate.sim.pipeline import run_project_sim
 from benchgate.watch.trigger import watch_once
 
 
@@ -203,6 +202,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         ref = args["component_ref"]
         mpn = args["mpn"]
         kicad_key = args["kicad_key"]
+        tags = args.get("tags") or ["characterize"]
         with LabSession(bench) as session:
             measured, meta = capture_and_fit(
                 session,
@@ -211,7 +211,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
                 mpn=mpn,
                 kicad_key=kicad_key,
                 design=str(p.design),
-                tags=args.get("tags"),
+                tags=tags,
             )
         subckt_name = f"MEAS_{ref}".upper()
         subckt_path = p.subckt / f"{subckt_name}.lib"
@@ -237,12 +237,37 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             measured=measured,
         )
         save_manifest(manifest, p.manifest, global_models_dir=p.global_models)
-        return {
+        out = {
             "measured": measured.params,
             "subckt": str(subckt_path),
             "kicad_key": kicad_key,
             "session_id": meta.session_id,
+            "tags": tags,
         }
+        if args.get("rerun_sim", True):
+            from benchgate.sim.pipeline import run_project_sim
+
+            sim_dir = p.reports / "sim"
+            sim_report, _ = run_project_sim(
+                p.design,
+                p.manifest,
+                sim_dir,
+                sim_profile_path=p.sim_profile,
+                profile=str(args.get("profile", "default")),
+            )
+            gate_path = p.reports / "gate_report.json"
+            gate = write_gate_report(
+                p.manifest,
+                gate_path,
+                captured_dir=p.captured,
+                sim_dir=sim_dir,
+                sim_report_path=sim_dir / "sim_report.json",
+                sim_profile_path=p.sim_profile,
+                profile=str(args.get("profile", "default")),
+            )
+            out["sim"] = sim_report.to_dict()
+            out["gate"] = gate.to_dict()
+        return out
 
     if name == "lab_list":
         p = _paths_for_design(args["design_dir"], args)
@@ -515,18 +540,53 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         if args.get("rules") != "none":
             rule_pack_paths = default_rule_pack_paths(home=p.home, design=p.design)
         mc_path = p.reports / "mc_tolerance" / "mc_tolerance.json"
+        sim_dir = p.reports / "sim"
+        profile = str(args.get("profile", "default"))
         report = write_gate_report(
             mp,
             out,
             captured_dir=p.captured,
-            sim_raw_path=sim_raw,
+            sim_dir=sim_dir if sim_dir.is_dir() else None,
+            sim_raw_path=sim_raw or (sim_dir / "sim_waveform.csv"),
             operating_point=args.get("operating_point"),
-            sim_report_path=p.reports / "sim" / "sim_report.json",
+            sim_report_path=sim_dir / "sim_report.json",
             stress_sweep_path=stress_sweep_path,
             monte_carlo_path=mc_path if mc_path.is_file() else None,
             rule_pack_paths=rule_pack_paths,
+            sim_profile_path=p.sim_profile,
+            profile=profile,
         )
         return report.to_dict()
+
+    if name == "diagnose":
+        from benchgate.diagnose import diagnose_project
+
+        p = _paths_for_design(args["design_dir"], args)
+        return diagnose_project(
+            p.reports,
+            captured_dir=p.captured,
+            gate_report_path=Path(args["gate_report_path"]) if args.get("gate_report_path") else None,
+        )
+
+    if name == "lab_compare_waveforms":
+        from benchgate.lab.analyze import compare_waveforms
+        from benchgate.bench_compare import load_sim_waveform_csv
+
+        p = _paths_for_design(args["design_dir"], args)
+        store = LabDataStore(p.captured)
+        bench_wf = store.load_waveform(args["session_id"], args.get("bench_channel", "scope_ch1"))
+        sim_path = Path(args["sim_csv"])
+        if not sim_path.is_absolute():
+            sim_path = p.reports / "sim" / sim_path
+        sim_wf = load_sim_waveform_csv(sim_path)
+        if sim_wf is None:
+            raise FileNotFoundError(f"sim waveform not found: {sim_path}")
+        cmp = compare_waveforms(bench_wf, sim_wf)
+        from benchgate.gate.report import waveform_status_from_comparison
+
+        result = cmp.to_dict()
+        result["waveform_status"] = waveform_status_from_comparison(result)
+        return result
 
     if name == "sim_tolerance":
         from benchgate.sim.tolerance import run_tolerance_study

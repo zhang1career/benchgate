@@ -66,7 +66,14 @@ def test_gate_rmse_via_analyze(tmp_path):
     )
     t2 = np.linspace(0, 1e-3, 80)
     sim_wf = Waveform(t2, np.sin(2 * np.pi * 1e3 * t2), 1, datetime.now(timezone.utc))
-    result = evaluate_entry(entry, captured_dir=tmp_path / "captured", sim_waveform=sim_wf)
+    result = evaluate_entry(
+        entry,
+        captured_dir=tmp_path / "captured",
+        compare_specs=[],
+        sim_waveforms={"default": sim_wf},
+        sim_report=None,
+        bench_compare_manifest=None,
+    )
     assert result.has_bench and result.has_sim
     assert result.rmse == pytest.approx(0.0, abs=1e-2)
 

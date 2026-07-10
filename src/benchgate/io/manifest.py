@@ -115,6 +115,8 @@ def _mapping_to_dict(
         d["sim_pins"] = m.sim_pins
     if m.spec:
         d["spec"] = m.spec
+    if m.bench_compare:
+        d["bench_compare"] = m.bench_compare
     if m.provenance:
         d["provenance"] = _provenance_to_dict(m.provenance)
     return d
@@ -143,6 +145,7 @@ def _mapping_from_dict(
         sim_pins=d.get("sim_pins"),
         provenance=provenance,
         spec=d.get("spec"),
+        bench_compare=d.get("bench_compare"),
         metadata=d.get("metadata", {}),
     )
 

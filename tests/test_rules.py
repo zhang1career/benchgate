@@ -79,3 +79,36 @@ def test_yield_rule_warns_without_mc():
     )
     mc = [r for r in ev.results if r.rule_id == "mc_yield_95"]
     assert mc and mc[0].passed and mc[0].message.startswith("warning:")
+
+
+def test_waveform_rmse_rule_pass_and_fail():
+    pack = load_rule_pack(_examples_rules("bench-waveform.yaml"))
+    gate_ok = {
+        "comparisons": [{"id": "vout", "rmse": 0.05, "waveform": {"correlation": 0.99}}],
+    }
+    ev_ok = evaluate_rule_packs([pack], RuleContext(gate_report=gate_ok), scope="gate")
+    rmse_ok = [r for r in ev_ok.results if r.rule_id == "waveform_rmse_board"]
+    assert rmse_ok and rmse_ok[0].passed
+
+    gate_bad = {
+        "comparisons": [{"id": "vout", "rmse": 0.35, "waveform": {"correlation": 0.99}}],
+    }
+    ev_bad = evaluate_rule_packs([pack], RuleContext(gate_report=gate_bad), scope="gate")
+    rmse_bad = [r for r in ev_bad.results if r.rule_id == "waveform_rmse_board"]
+    assert rmse_bad and not rmse_bad[0].passed
+
+
+def test_correlation_gte_rule_warns_on_low_corr():
+    pack = load_rule_pack(_examples_rules("bench-waveform.yaml"))
+    gate = {
+        "comparisons": [{"id": "vout", "rmse": 0.05, "waveform": {"correlation": 0.5}}],
+    }
+    ev = evaluate_rule_packs([pack], RuleContext(gate_report=gate), scope="gate")
+    corr = [r for r in ev.results if r.rule_id == "waveform_correlation_board"]
+    assert corr and corr[0].passed and corr[0].message.startswith("warning:")
+
+
+def test_load_bench_waveform_rules_pack():
+    pack = load_rule_pack(_examples_rules("bench-waveform.yaml"))
+    assert pack.id == "bench-waveform"
+    assert any(r.limit.get("type") == "waveform_rmse_lte" for r in pack.rules)

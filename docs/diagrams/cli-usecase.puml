@@ -162,10 +162,10 @@ together {
     定位偏差指标
   ]
   rectangle diag #F7F7F7;line:666666 [
-    **sim diagnose**
+    **benchgate diagnose**
     ----
-    汇总网表检查、log，
-    查预测侧问题
+    sim + gate + lab 汇总；
+    设计/物料/测试归因
   ]
   P5 -down-> lc
   lc -down-> g5

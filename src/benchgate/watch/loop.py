@@ -74,7 +74,7 @@ def watch_loop(
         last_result["iterations"] = iterations
         last_result["last"] = result
 
-        if result.get("changed_files"):
+        if result.get("changed_files") or result.get("triggered_sessions"):
             last_result.setdefault("runs", []).append(result)
 
         if result.get("changed_files") and debounce_s > 0:

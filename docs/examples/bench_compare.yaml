@@ -1,0 +1,35 @@
+# Example bench_compare block for ~/.benchgate/config/sim_profiles.yaml
+#
+# Maps bench scope channels to ngspice probe signals for gate RMSE + scalar checks.
+
+default:
+  checks:
+    - signal: v(vout)
+      metric: avg
+      gte: 4.5
+      lte: 5.5
+
+  bench_compare:
+    - id: vout
+      signal: v(vout)
+      bench_channel: scope_ch1
+      sim_metric: avg
+      tolerance_pct: 5.0
+
+    - id: u1_out
+      signal: v(net-_u1-out_)
+      bench_channel: scope_ch2
+      sim_metric: pp
+      tolerance_pct: 10.0
+
+# Per-component override lives in manifest.yaml:
+#
+# entries:
+#   - kicad_key: Device:C::100n
+#     reference: C1
+#     bench_compare:
+#       - id: c1_step
+#         signal: v(n_c1)
+#         bench_channel: scope_ch1
+#         bench_metric: tau_s
+#         component_ref: C1
