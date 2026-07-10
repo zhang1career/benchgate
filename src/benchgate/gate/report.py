@@ -7,16 +7,29 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from numbers import Real
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from benchgate.bench_compare import (
+    DEFAULT_CORR_FAIL,
+    DEFAULT_CORR_WARN,
+    DEFAULT_RMSE_FAIL_V,
+    DEFAULT_RMSE_WARN_V,
+    BenchCompareSpec,
+    load_bench_compare_manifest,
+    load_merged_compare_specs,
+    load_sim_waveforms,
+    specs_for_entry,
+)
 from benchgate.io.manifest import load_manifest
 from benchgate.instruments.types import Waveform
 from benchgate.lab.analyze import compare_waveforms
 from benchgate.lab.store import LabDataStore
 from benchgate.rules.evaluate import RuleContext, evaluate_rule_packs
-from benchgate.rules.loader import default_rule_pack_paths, load_rule_packs
+from benchgate.rules.loader import load_rule_packs
 from benchgate.schemas import ComponentMapping, MappingManifest, MeasuredParams
+from benchgate.sim.analysis import _compute_metric
 
 
 @dataclass
@@ -31,6 +44,9 @@ class GateEntry:
     range_warnings: list[str] = field(default_factory=list)
     spec_status: str = "n/a"  # pass | fail | n/a
     spec_failures: list[str] = field(default_factory=list)
+    waveform_comparison: dict[str, Any] | None = None
+    waveform_status: str = "n/a"  # pass | warn | fail | n/a
+    scalar_comparisons: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -70,19 +86,6 @@ def load_sim_report_context(sim_report_path: Path) -> tuple[dict | None, dict | 
     return op, stress_summary
 
 
-def _load_sim_csv(path: Path) -> tuple[np.ndarray, np.ndarray] | None:
-    if not path.exists():
-        return None
-    lines = path.read_text(encoding="utf-8").strip().splitlines()
-    if len(lines) < 2:
-        return None
-    delim = "," if "," in lines[1] else None
-    data = np.loadtxt(path, skiprows=1, delimiter=delim)
-    if data.ndim != 2 or data.shape[1] < 2:
-        return None
-    return data[:, 0], data[:, 1]
-
-
 def load_bench_waveform(
     measured: MeasuredParams,
     *,
@@ -96,8 +99,19 @@ def load_bench_waveform(
         return None
 
 
+def load_session_derived(
+    session_id: str,
+    *,
+    captured_dir: Path,
+) -> dict[str, float]:
+    try:
+        meta = LabDataStore(captured_dir).get_session(session_id)
+        return dict(meta.derived)
+    except (FileNotFoundError, KeyError, OSError):
+        return {}
+
+
 def _interval_bounds(dim: str, bounds: object, *, label: str) -> tuple[object, object] | str:
-    """Parse ``[min, max]`` interval bounds, or return an error message."""
     if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
         return bounds[0], bounds[1]
     return f"{dim}: invalid {label} bounds (expected [min, max])"
@@ -107,12 +121,6 @@ def check_valid_range(
     valid_range: dict,
     operating_point: dict | None,
 ) -> list[str]:
-    """Warn when the operating point falls outside a model's declared valid_range.
-
-    Each ``valid_range`` dimension is a closed interval ``[min, max]`` (use
-    ``null``/``None`` or ``.inf`` for an open bound). A dimension with no
-    operating-point value yields an "unverifiable" warning (never silent).
-    """
     warnings: list[str] = []
     op = operating_point or {}
     for dim, bounds in valid_range.items():
@@ -133,13 +141,6 @@ def check_valid_range(
 
 
 def check_spec(spec: dict, metrics: dict | None) -> list[str]:
-    """Return spec failures: achieved ``metrics`` vs required ``spec`` intervals.
-
-    Each ``spec`` dimension is a closed interval ``[min, max]`` (open bound via
-    ``null``/``.inf``). A spec dimension with no achieved metric is reported as
-    "not characterized" (counts as a failure — can't prove it's met).
-    Malformed bounds count as failures (never silent pass).
-    """
     failures: list[str] = []
     m = metrics or {}
     for dim, bounds in spec.items():
@@ -159,33 +160,188 @@ def check_spec(spec: dict, metrics: dict | None) -> list[str]:
     return failures
 
 
-def _waveform_from_arrays(time_s: np.ndarray, voltage_v: np.ndarray) -> Waveform:
-    return Waveform(
-        time_s=np.asarray(time_s, dtype=float),
-        voltage_v=np.asarray(voltage_v, dtype=float),
-        channel=1,
-        timestamp=datetime.now(timezone.utc),
-    )
+def _sim_check_value(sim_report: dict | None, signal: str, metric: str) -> float | None:
+    if not sim_report:
+        return None
+    checks = (sim_report.get("checks") or {}).get("checks") or []
+    for item in checks:
+        if item.get("signal") == signal and item.get("metric") == metric:
+            val = item.get("value")
+            if isinstance(val, Real):
+                return float(val)
+    return None
+
+
+def waveform_status_from_comparison(
+    cmp: dict[str, Any],
+    *,
+    rmse_warn: float = DEFAULT_RMSE_WARN_V,
+    rmse_fail: float = DEFAULT_RMSE_FAIL_V,
+    corr_warn: float = DEFAULT_CORR_WARN,
+    corr_fail: float = DEFAULT_CORR_FAIL,
+) -> str:
+    rmse = cmp.get("rmse")
+    corr = cmp.get("correlation")
+    if rmse is None or (isinstance(rmse, float) and np.isnan(rmse)):
+        return "n/a"
+    status = "pass"
+    if isinstance(rmse, Real) and float(rmse) > rmse_fail:
+        return "fail"
+    if isinstance(corr, Real) and float(corr) < corr_fail:
+        return "fail"
+    if isinstance(rmse, Real) and float(rmse) > rmse_warn:
+        status = "warn"
+    if isinstance(corr, Real) and float(corr) < corr_warn:
+        status = "warn"
+    return status
+
+
+def _bench_scalar(
+    bench_wf: Waveform | None,
+    derived: dict[str, float],
+    spec: BenchCompareSpec,
+) -> float | None:
+    if spec.bench_metric:
+        val = derived.get(spec.bench_metric)
+        if isinstance(val, Real):
+            return float(val)
+    if bench_wf is not None and spec.sim_metric:
+        return _compute_metric(bench_wf.voltage_v, spec.sim_metric)
+    return None
+
+
+def _sim_scalar(
+    spec: BenchCompareSpec,
+    sim_report: dict | None,
+    probe_meta: dict[str, Any] | None,
+) -> float | None:
+    if probe_meta and probe_meta.get("sim_scalar") is not None:
+        return float(probe_meta["sim_scalar"])
+    if spec.sim_metric:
+        return _sim_check_value(sim_report, spec.signal, spec.sim_metric)
+    return None
+
+
+def evaluate_compare_spec(
+    spec: BenchCompareSpec,
+    *,
+    entry: ComponentMapping | None,
+    captured_dir: Path,
+    sim_waveforms: dict[str, Waveform],
+    sim_report: dict | None,
+    probe_meta: dict[str, Any] | None,
+    operating_point: dict | None = None,
+) -> dict[str, Any]:
+    """Evaluate one bench_compare probe (waveform + optional scalar)."""
+    bench_wf: Waveform | None = None
+    derived: dict[str, float] = {}
+    if entry and entry.measured:
+        bench_wf = load_bench_waveform(
+            entry.measured,
+            captured_dir=captured_dir,
+            channel=spec.bench_channel,
+        )
+        derived = load_session_derived(entry.measured.session_id, captured_dir=captured_dir)
+
+    sim_wf = sim_waveforms.get(spec.id) or sim_waveforms.get("default")
+
+    waveform_cmp: dict[str, Any] | None = None
+    waveform_status = "n/a"
+    if bench_wf and sim_wf:
+        waveform_cmp = compare_waveforms(bench_wf, sim_wf).to_dict()
+        waveform_status = waveform_status_from_comparison(waveform_cmp)
+
+    bench_val = _bench_scalar(bench_wf, derived, spec)
+    sim_val = _sim_scalar(spec, sim_report, probe_meta)
+    scalar_row: dict[str, Any] | None = None
+    scalar_status = "n/a"
+    if bench_val is not None and sim_val is not None:
+        delta = sim_val - bench_val
+        rel = delta / bench_val if bench_val != 0 else float("nan")
+        scalar_row = {
+            "id": spec.id,
+            "signal": spec.signal,
+            "bench_metric": spec.bench_metric or spec.sim_metric,
+            "bench_value": bench_val,
+            "sim_value": sim_val,
+            "delta": delta,
+            "rel_error": rel,
+        }
+        tol = spec.tolerance_pct
+        if tol is not None and bench_val != 0:
+            rel_pct = abs(delta / bench_val) * 100.0
+            scalar_status = "fail" if rel_pct > float(tol) else "pass"
+        else:
+            scalar_status = "pass" if abs(delta) < 1e-9 else "warn"
+
+    notes = ""
+    if bench_wf and not sim_wf:
+        notes = "bench only"
+    elif sim_wf and not bench_wf:
+        notes = "sim only"
+
+    return {
+        "id": spec.id,
+        "component_ref": spec.component_ref or (entry.reference if entry else None),
+        "signal": spec.signal,
+        "has_bench": bench_wf is not None,
+        "has_sim": sim_wf is not None,
+        "waveform": waveform_cmp,
+        "waveform_status": waveform_status,
+        "rmse": waveform_cmp.get("rmse") if waveform_cmp else None,
+        "scalar": scalar_row,
+        "scalar_status": scalar_status,
+        "notes": notes,
+    }
 
 
 def evaluate_entry(
     entry: ComponentMapping,
     *,
     captured_dir: Path,
-    sim_waveform: Waveform | None,
+    compare_specs: list[BenchCompareSpec],
+    sim_waveforms: dict[str, Waveform],
+    sim_report: dict | None,
+    bench_compare_manifest: dict | None,
     operating_point: dict | None = None,
 ) -> GateEntry:
     ref = entry.reference or entry.kicad_key
-    bench_wf = load_bench_waveform(entry.measured, captured_dir=captured_dir) if entry.measured else None
+    entry_specs = specs_for_entry(entry, compare_specs)
 
-    rmse = None
-    notes = ""
-    if bench_wf and sim_waveform:
-        rmse = compare_waveforms(bench_wf, sim_waveform).rmse
-    elif bench_wf:
-        notes = "bench only"
-    elif sim_waveform:
-        notes = "sim only"
+    compare_results = []
+    for spec in entry_specs:
+        probe_meta = _probe_meta(bench_compare_manifest, spec.id)
+        compare_results.append(
+            evaluate_compare_spec(
+                spec,
+                entry=entry,
+                captured_dir=captured_dir,
+                sim_waveforms=sim_waveforms,
+                sim_report=sim_report,
+                probe_meta=probe_meta,
+                operating_point=operating_point,
+            )
+        )
+
+    primary = compare_results[0] if compare_results else None
+    rmse = primary.get("rmse") if primary else None
+    waveform_cmp = primary.get("waveform") if primary else None
+    waveform_status = primary.get("waveform_status", "n/a") if primary else "n/a"
+    notes = primary.get("notes", "") if primary else ""
+    has_bench = any(r["has_bench"] for r in compare_results) or bool(entry.measured)
+    has_sim = any(r["has_sim"] for r in compare_results) or bool(sim_waveforms)
+
+    if not compare_results and entry.measured:
+        bench_wf = load_bench_waveform(entry.measured, captured_dir=captured_dir)
+        sim_wf = sim_waveforms.get("default")
+        if bench_wf and sim_wf:
+            waveform_cmp = compare_waveforms(bench_wf, sim_wf).to_dict()
+            rmse = waveform_cmp.get("rmse")
+            waveform_status = waveform_status_from_comparison(waveform_cmp)
+        elif bench_wf:
+            notes = "bench only"
+        elif sim_wf:
+            notes = "sim only"
 
     range_warnings: list[str] = []
     if entry.provenance and entry.provenance.valid_range:
@@ -198,36 +354,63 @@ def evaluate_entry(
         spec_failures = check_spec(entry.spec, metrics)
         spec_status = "fail" if spec_failures else "pass"
 
+    scalar_rows = [r["scalar"] for r in compare_results if r.get("scalar")]
+
     return GateEntry(
         reference=ref,
         kicad_key=entry.kicad_key,
-        has_bench=bench_wf is not None,
-        has_sim=sim_waveform is not None,
+        has_bench=has_bench,
+        has_sim=has_sim,
         rmse=rmse,
         notes=notes,
         source=entry.provenance.source.value if entry.provenance else None,
         range_warnings=range_warnings,
         spec_status=spec_status,
         spec_failures=spec_failures,
+        waveform_comparison=waveform_cmp,
+        waveform_status=waveform_status,
+        scalar_comparisons=scalar_rows,
     )
+
+
+def _probe_meta(manifest: dict | None, probe_id: str) -> dict[str, Any] | None:
+    if not manifest:
+        return None
+    for probe in manifest.get("probes") or []:
+        if probe.get("id") == probe_id:
+            return probe
+    return None
 
 
 def build_gate_report(
     manifest: MappingManifest,
     *,
     captured_dir: Path,
+    sim_dir: Path | None = None,
     sim_raw_path: Path | None = None,
     operating_point: dict | None = None,
     sim_report_path: Path | None = None,
     stress_sweep_path: Path | None = None,
     monte_carlo_path: Path | None = None,
     rule_pack_paths: list[Path] | None = None,
+    sim_profile_path: Path | None = None,
+    profile: str = "default",
 ) -> GateReport:
-    sim_waveform: Waveform | None = None
-    if sim_raw_path and sim_raw_path.exists():
-        loaded = _load_sim_csv(sim_raw_path)
-        if loaded:
-            sim_waveform = _waveform_from_arrays(*loaded)
+    sim_dir = sim_dir or (sim_raw_path.parent if sim_raw_path else None)
+    bench_compare_manifest = load_bench_compare_manifest(sim_dir) if sim_dir else None
+    sim_waveforms = load_sim_waveforms(sim_dir, bench_compare_manifest) if sim_dir else {}
+    if not sim_waveforms and sim_raw_path and sim_raw_path.exists():
+        from benchgate.bench_compare import load_sim_waveform_csv
+
+        wf = load_sim_waveform_csv(sim_raw_path)
+        if wf is not None:
+            sim_waveforms["default"] = wf
+
+    compare_specs = load_merged_compare_specs(
+        manifest,
+        sim_profile_path=sim_profile_path,
+        profile=profile,
+    )
 
     inferred_op, stress_summary = (
         load_sim_report_context(sim_report_path) if sim_report_path else (None, None)
@@ -249,14 +432,37 @@ def build_gate_report(
             monte_carlo_data = None
 
     entries: list[GateEntry] = []
+    board_comparisons: list[dict[str, Any]] = []
+    refs_with_entry: set[str] = set()
+
     for item in manifest.entries:
         if not item.measured and item.spice_kind.value == "passive":
             continue
+        if item.reference:
+            refs_with_entry.add(item.reference)
         entries.append(
             evaluate_entry(
                 item,
                 captured_dir=captured_dir,
-                sim_waveform=sim_waveform,
+                compare_specs=compare_specs,
+                sim_waveforms=sim_waveforms,
+                sim_report=sim_report_data,
+                bench_compare_manifest=bench_compare_manifest,
+                operating_point=operating_point,
+            )
+        )
+
+    for spec in compare_specs:
+        if spec.component_ref and spec.component_ref in refs_with_entry:
+            continue
+        board_comparisons.append(
+            evaluate_compare_spec(
+                spec,
+                entry=None,
+                captured_dir=captured_dir,
+                sim_waveforms=sim_waveforms,
+                sim_report=sim_report_data,
+                probe_meta=_probe_meta(bench_compare_manifest, spec.id),
                 operating_point=operating_point,
             )
         )
@@ -266,6 +472,10 @@ def build_gate_report(
     compared = sum(1 for e in entries if e.rmse is not None)
     range_warnings = sum(1 for e in entries if e.range_warnings)
     spec_failures = sum(1 for e in entries if e.spec_status == "fail")
+    waveform_fails = sum(1 for e in entries if e.waveform_status == "fail")
+    waveform_warns = sum(1 for e in entries if e.waveform_status == "warn")
+    waveform_fails += sum(1 for c in board_comparisons if c.get("waveform_status") == "fail")
+    waveform_warns += sum(1 for c in board_comparisons if c.get("waveform_status") == "warn")
 
     stress_sweep_summary = None
     if stress_sweep_path and stress_sweep_path.exists():
@@ -275,6 +485,17 @@ def build_gate_report(
         except (json.JSONDecodeError, OSError):
             pass
 
+    gate_payload = {
+        "entries": [asdict(e) for e in entries],
+        "comparisons": board_comparisons,
+        "waveform_thresholds": {
+            "rmse_warn_v": DEFAULT_RMSE_WARN_V,
+            "rmse_fail_v": DEFAULT_RMSE_FAIL_V,
+            "correlation_warn": DEFAULT_CORR_WARN,
+            "correlation_fail": DEFAULT_CORR_FAIL,
+        },
+    }
+
     rules_summary = None
     if rule_pack_paths is not None:
         packs = load_rule_packs(rule_pack_paths)
@@ -282,6 +503,7 @@ def build_gate_report(
             sim_report=sim_report_data,
             monte_carlo=monte_carlo_data,
             operating_point=operating_point,
+            gate_report=gate_payload,
         )
         rules_summary = evaluate_rule_packs(packs, ctx).to_dict()
 
@@ -295,8 +517,11 @@ def build_gate_report(
             "compared": compared,
             "range_warnings": range_warnings,
             "spec_failures": spec_failures,
+            "waveform_failures": waveform_fails,
+            "waveform_warnings": waveform_warns,
             "stress_summary": stress_summary,
             "stress_sweep_worst": stress_sweep_summary,
+            "comparisons": board_comparisons,
             "rules": rules_summary,
         },
     )
@@ -307,23 +532,29 @@ def write_gate_report(
     output_path: Path,
     *,
     captured_dir: Path,
+    sim_dir: Path | None = None,
     sim_raw_path: Path | None = None,
     operating_point: dict | None = None,
     sim_report_path: Path | None = None,
     stress_sweep_path: Path | None = None,
     monte_carlo_path: Path | None = None,
     rule_pack_paths: list[Path] | None = None,
+    sim_profile_path: Path | None = None,
+    profile: str = "default",
 ) -> GateReport:
     manifest = load_manifest(manifest_path)
     report = build_gate_report(
         manifest,
         captured_dir=captured_dir,
+        sim_dir=sim_dir,
         sim_raw_path=sim_raw_path,
         operating_point=operating_point,
         sim_report_path=sim_report_path,
         stress_sweep_path=stress_sweep_path,
         monte_carlo_path=monte_carlo_path,
         rule_pack_paths=rule_pack_paths,
+        sim_profile_path=sim_profile_path,
+        profile=profile,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")

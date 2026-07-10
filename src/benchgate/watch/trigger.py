@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from benchgate.bench_compare import WATCH_TRIGGER_TAGS
 from benchgate.gate.report import load_sim_report_context, write_gate_report
 from benchgate.io.blocks_config import has_tolerance_study
 from benchgate.mapping.engine import mapping_status, sync_project
@@ -15,12 +16,13 @@ from benchgate.paths import benchgate_paths
 from benchgate.pipeline.local_blocks import sync_local_blocks
 from benchgate.rules.loader import default_rule_pack_paths
 from benchgate.sim.pipeline import run_project_sim
-from benchgate.watch.auto_capture import run_auto_capture
+from benchgate.watch.auto_capture import run_auto_capture as _run_auto_capture
 
 
 WATCH_GLOBS = ("*.kicad_sch", "*.kicad_pro", "*.kicad_pcb")
 PIPELINE_FILES = ("models/blocks.yaml",)
 BLOCK_FILE_SUFFIXES = (".net", ".cir", ".asc")
+SESSION_META = "session.yaml"
 
 
 def _is_pipeline_block_file(path: Path) -> bool:
@@ -82,6 +84,43 @@ def watched_files(design_dir: Path) -> list[Path]:
     return out
 
 
+def session_files(design_dir: Path) -> list[Path]:
+    sessions_dir = design_dir / "models" / "captured" / "sessions"
+    if not sessions_dir.is_dir():
+        return []
+    return sorted(sessions_dir.glob(f"*/{SESSION_META}"))
+
+
+def detect_tagged_session_changes(design_dir: Path, state_path: Path) -> list[str]:
+    """Return session_ids newly written with a watch trigger tag."""
+    import yaml
+
+    state = WatchState.load(state_path)
+    known = state.files.get("_sessions", {})
+    if not isinstance(known, dict):
+        known = {}
+    current: dict[str, str] = {}
+    triggered: list[str] = []
+
+    for meta_path in session_files(design_dir):
+        digest = _file_hash(meta_path)
+        sid = meta_path.parent.name
+        current[sid] = digest
+        if known.get(sid) == digest:
+            continue
+        try:
+            data = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+        except OSError:
+            continue
+        tags = set(data.get("tags") or [])
+        if tags & WATCH_TRIGGER_TAGS:
+            triggered.append(sid)
+
+    state.files["_sessions"] = current
+    state.save(state_path)
+    return triggered
+
+
 def detect_changes(design_dir: Path, state_path: Path) -> list[Path]:
     state = WatchState.load(state_path)
     changed: list[Path] = []
@@ -94,7 +133,7 @@ def detect_changes(design_dir: Path, state_path: Path) -> list[Path]:
         if state.files.get(key) != digest:
             changed.append(path)
 
-    state.files = current
+    state.files.update(current)
     state.save(state_path)
     return changed
 
@@ -124,13 +163,21 @@ def watch_once(
     tolerance_jobs: int = 4,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
+    triggered_sessions = detect_tagged_session_changes(design_dir, state_path)
+    design_changed = bool(changed)
+    session_triggered = bool(triggered_sessions)
     operating_point: dict = {}
     result: dict = {
         "ran_at": datetime.now(timezone.utc).isoformat(),
         "changed_files": [str(p) for p in changed],
+        "triggered_sessions": triggered_sessions,
     }
 
-    if run_pipeline:
+    if not design_changed and not session_triggered:
+        result["skipped"] = True
+        return result
+
+    if run_pipeline and design_changed:
         pipeline = sync_local_blocks(
             models_dir=models_dir,
             manifest_path=manifest_path,
@@ -154,7 +201,7 @@ def watch_once(
 
     if run_auto_capture and status.get("pending"):
         paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
-        result["auto_capture"] = run_auto_capture(
+        result["auto_capture"] = _run_auto_capture(
             design_dir,
             manifest,
             models_dir=models_dir,
@@ -194,7 +241,7 @@ def watch_once(
 
     mc_tolerance_path: Path | None = None
     blocks_path = blocks_yaml or (design_dir / "models" / "blocks.yaml")
-    if run_tolerance and not status.get("unmapped") and blocks_path.is_file() and has_tolerance_study(blocks_path):
+    if run_tolerance and design_changed and not status.get("unmapped") and blocks_path.is_file() and has_tolerance_study(blocks_path):
         from benchgate.sim.tolerance import run_tolerance_study
 
         tol_dir = reports_dir / "mc_tolerance"
@@ -227,12 +274,15 @@ def watch_once(
             manifest_path,
             gate_path,
             captured_dir=models_dir / "captured",
+            sim_dir=sim_dir if sim_dir.exists() else None,
             sim_raw_path=sim_dir / "sim_waveform.csv" if sim_dir.exists() else None,
             operating_point=op,
             sim_report_path=sim_report if sim_report.exists() else None,
             stress_sweep_path=stress_sweep_path,
             monte_carlo_path=mc_tolerance_path,
             rule_pack_paths=default_rule_pack_paths(home=paths.home, design=design_dir),
+            sim_profile_path=sim_profile_path,
+            profile=profile,
         )
         result["gate"] = gate.to_dict()
         result["operating_point"] = op

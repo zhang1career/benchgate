@@ -42,11 +42,17 @@ stop
 
 note right
   单独排查失败：
+  **benchgate diagnose**（sim+gate+lab）
+  仅仿真侧：
   **sim diagnose**
+  样机波形对照：
+  **lab compare**
   单独签核应力：
   **gate report --stress-sweep**
   长跑 MC 前：
   **blocks validate**
+  Session 触发 watch tag：
+  anomaly · baseline · characterize · compare
 end note
 
 @enduml

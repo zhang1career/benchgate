@@ -45,6 +45,12 @@ def load_profile_operating_point(config_path: Path, profile: str = "default") ->
     return dict(op) if op else {}
 
 
+def load_profile_bench_compare(config_path: Path, profile: str = "default") -> list[dict]:
+    """Return ``bench_compare`` probe list from a sim profile block."""
+    raw = load_profile_block(config_path, profile).get("bench_compare", [])
+    return [dict(item) for item in raw] if raw else []
+
+
 def infer_operating_point(
     block: dict[str, Any],
     *,

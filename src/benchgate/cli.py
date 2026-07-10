@@ -22,8 +22,10 @@ CLI_DESCRIPTION = (
 
 DOCS_EPILOG = """\
 documentation (in the benchgate install / source tree):
-  docs/CLI_REFERENCE.md     all leaf commands (29)
+  docs/CLI_REFERENCE.md     all leaf commands (31)
   docs/diagrams/command-tree.puml   CLI mindmap
+  docs/examples/blocks.yaml         top-down blocks template
+  docs/examples/bench_compare.yaml  bench vs sim probe mapping
   README.md                 workflows (top-down / bottom-up)
   docs/MINIMUM_SCOPE.md     architecture and agent tools"""
 
@@ -412,6 +414,8 @@ def cmd_lab_capture(args: argparse.Namespace) -> int:
         params["channel"] = args.channel
     if args.component_ref:
         params["component_ref"] = args.component_ref
+    if args.tags:
+        params["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
     result = dispatch("lab_capture_waveform", params)
     if args.out:
         from benchgate.lab.store import LabDataStore, dump_waveform_csv
@@ -425,15 +429,40 @@ def cmd_lab_capture(args: argparse.Namespace) -> int:
 
 
 def cmd_lab_characterize(args: argparse.Namespace) -> int:
-    params = {
+    params: dict = {
         "design_dir": args.design,
         "component_ref": args.component_ref,
         "mpn": args.mpn,
         "kicad_key": args.kicad_key,
         **_lab_overrides(args),
     }
+    if args.tags:
+        params["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.no_rerun_sim:
+        params["rerun_sim"] = False
     result = dispatch("lab_capture", params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_lab_compare(args: argparse.Namespace) -> int:
+    params = {
+        "design_dir": args.design,
+        "session_id": args.session,
+        "sim_csv": args.sim_csv,
+        "bench_channel": args.channel,
+    }
+    result = dispatch("lab_compare_waveforms", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.gate_report:
+        params["gate_report_path"] = args.gate_report
+    result = dispatch("diagnose", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -760,6 +789,14 @@ def main(argv: list[str] | None = None) -> int:
     bv.add_argument("--profile", default="default", help="sim_profiles.yaml block for check fallback")
     bv.set_defaults(func=cmd_blocks_validate)
 
+    p_diag = sub.add_parser(
+        "diagnose",
+        help="Unified diagnosis: sim + gate + lab with responsibility attribution",
+    )
+    _add_design_arg(p_diag)
+    p_diag.add_argument("--gate-report", dest="gate_report", default=None, help="Override gate_report.json path")
+    p_diag.set_defaults(func=cmd_diagnose)
+
     p_gate = sub.add_parser("gate", help="Bench vs sim quality")
     gate_sub = p_gate.add_subparsers(dest="gate_cmd", required=True)
     gr = gate_sub.add_parser("report")
@@ -809,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
     lc.add_argument("--instrument", default=None)
     lc.add_argument("--channel", type=int, default=None)
     lc.add_argument("--component-ref", dest="component_ref", default=None)
+    lc.add_argument("--tags", default=None, help="Comma-separated session tags (e.g. anomaly,baseline)")
     lc.add_argument("--out", default=None, help="Export captured waveform to CSV")
     lc.set_defaults(func=cmd_lab_capture)
 
@@ -820,7 +858,16 @@ def main(argv: list[str] | None = None) -> int:
     lch.add_argument("--scope", default=None)
     lch.add_argument("--dmm", default=None)
     lch.add_argument("--awg", default=None)
+    lch.add_argument("--tags", default=None, help="Session tags (default: characterize)")
+    lch.add_argument("--no-rerun-sim", action="store_true", help="Skip sim+gate after characterize")
     lch.set_defaults(func=cmd_lab_characterize)
+
+    lcmp = lab_sub.add_parser("compare", help="Compare bench session waveform vs sim CSV")
+    _add_design_arg(lcmp)
+    lcmp.add_argument("--session", required=True, help="Bench session id")
+    lcmp.add_argument("--sim-csv", dest="sim_csv", default="sim_waveform.csv", help="Sim waveform under reports/sim/")
+    lcmp.add_argument("--channel", default="scope_ch1")
+    lcmp.set_defaults(func=cmd_lab_compare)
 
     lq = lab_sub.add_parser("query", help="Query stored sessions / metrics / waveforms")
     lq_sub = lq.add_subparsers(dest="lab_query_cmd", required=True)

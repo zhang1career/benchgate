@@ -25,6 +25,8 @@ rules:
 | `check_metric` | 仿真 check 指标区间 | `signal`, `metric`, `min`, `max` |
 | `stress_passed` | 应力签核全通过 | `allow_warn: false` 可选 |
 | `yield_gte` | Monte Carlo 良率下限 | `min_pct` |
+| `waveform_rmse_lte` | 实测 vs 仿真波形 RMSE 上限 | `max_v`（V），可选 `probe_id` |
+| `correlation_gte` | 波形相关系数下限 | `min`，可选 `probe_id` |
 
 ### 默认加载顺序
 

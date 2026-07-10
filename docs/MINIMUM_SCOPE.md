@@ -393,7 +393,7 @@ benchgate watch once
 
 跳过开关：`--no-pipeline` · `--no-sim` · `--no-gate` · `--no-tolerance` · `--no-auto-capture` · `--auto-capture-dry-run` · `--tolerance-strategy` · `--tolerance-jobs` · `--tolerance-samples`。
 
-故障排查：**`benchgate sim diagnose`** — 汇总 preflight / sim_report / ngspice.log。
+故障排查：**`benchgate diagnose`** — sim + gate + lab 汇总与归因；仅仿真侧用 **`benchgate sim diagnose`**。
 
 单独签核 stress 扫描：**`benchgate gate report --stress-sweep --profile <name>`**。
 
@@ -415,7 +415,7 @@ benchgate MCP 示例：[docs/examples/cursor-mcp.json](../examples/cursor-mcp.js
   → 工程师在 KiCad 打开审核
 
 用户：「跑 charge_pump 仿真并解释失败原因」
-  → benchgate MCP：sim_run · sim_diagnose · gate_report
+  → benchgate MCP：sim_run · diagnose · gate_report
 
 用户：「U5 的实测模型是否过期？」
   → benchgate：mapping_status / model_status / gate 报告
@@ -437,7 +437,8 @@ CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgat
 | `lab_list` | `lab list` | 仪器 + 角色绑定 |
 | `lab_read` | `lab read` | 标量读数（默认 dmm） |
 | `lab_capture_waveform` | `lab capture` | scope 波形 → Session |
-| `lab_capture` | `lab characterize` 内 | 采数 + 拟合 → subckt + manifest |
+| `lab_capture` | `lab characterize` 内 | 采数 + 拟合 → subckt + manifest；默认重跑 sim+gate |
+| `lab_compare_waveforms` | `lab compare` | session 波形 vs sim CSV |
 | `lab_apply_model` | — | 写 Sim.* + manifest（Agent 专用） |
 | `lab_query_sessions` | `lab query sessions` | 历史 Session |
 | `lab_metric_series` | `lab query metric` | 跨会话指标序列 |
@@ -470,9 +471,10 @@ CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgat
 | `sim_stress_sweep` | `sim stress-sweep` | 扫描 stress 轴 |
 | `sim_sweep` | `sim sweep` | 参数扫描 |
 | `sim_cosim` | `sim cosim` | 固件 cosim（进阶） |
-| `sim_diagnose` | `sim diagnose` | preflight / report / log  actionable 摘要 |
+| `sim_diagnose` | `sim diagnose` | preflight / report / log（仅仿真侧） |
+| `diagnose` | `benchgate diagnose` | sim + gate + lab 汇总；`attribution` 归因 |
 | `sim_tolerance` | `sim tolerance` | MC：lhs/adaptive/sequential/auto；`--jobs`；粗→细；块级层 |
-| `gate_report` | `gate report` | spec · valid_range · RMSE · rules；可选 `--stress-sweep` |
+| `gate_report` | `gate report` | spec · valid_range · 波形 RMSE/标量 · rules；可选 `--stress-sweep` |
 
 **MCP**
 

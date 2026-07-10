@@ -18,7 +18,7 @@ benchgate 跟着设计工程运行：用户画原理图、定指标；系统在�
 | **控制生产成本** — 减少盲目打板、过量设计裕量 | 改图后自动回归（`watch`）；签核报告留档，避免重复争论 | **已覆盖** |
 | **指标预算是否成立** — 功能/非功能是否在设计范围内 | 子电路配置 / `spec` → `gate report` | **已覆盖** |
 | **电气应力与安全裕量** | `stress-sweep`、profile 应力探针（器件/电路级，非安规认证） | **已覆盖** |
-| **实物异常时对照分析** | 实测 Session、实测 vs 预测 RMSE、`sim diagnose` | **部分覆盖** |
+| **实物异常时对照分析** | 实测 Session、实测 vs 预测 RMSE/标量、`benchgate diagnose` 归因、`lab compare` | **已覆盖** |
 | **实验复现与审计** | `captured/sessions/`、`lab query` | **已覆盖** |
 | **可制造性、批次一致性** | `blocks validate` + `blocks.yaml` 容差/环境/mix + `sim tolerance`（auto/并行/粗→细）→ `gate report` | **已覆盖**（M1–M4） |
 
@@ -114,9 +114,12 @@ benchgate gate report --design design/myboard --stress-sweep --profile default
 **样机异常：实测入库并对照**
 
 ```bash
+benchgate lab capture --design design/myboard --tags anomaly
 benchgate lab characterize --design design/myboard \
   --component-ref Q1 --mpn SS8050 --kicad-key "..."
 benchgate gate report --design design/myboard
+benchgate diagnose --design design/myboard
+benchgate lab compare --design design/myboard --session <session_id>
 ```
 
 **charge-pump 工程**
@@ -137,7 +140,7 @@ benchgate sim diagnose --design $DESIGN
 [command-tree.puml](docs/diagrams/command-tree.puml) · [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) · [command-flow.puml](docs/diagrams/command-flow.puml) · [MINIMUM_SCOPE §8](docs/MINIMUM_SCOPE.md#8-benchgate-自有-agent-工具最小集)
 
 ```
-mapping · sim · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · mcp
+mapping · sim · diagnose · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · mcp
 ```
 
 ### 报告对比与日常巡检（命令行即可）

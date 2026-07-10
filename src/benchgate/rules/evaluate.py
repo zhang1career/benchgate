@@ -14,6 +14,7 @@ class RuleContext:
     sim_report: dict[str, Any] | None = None
     monte_carlo: dict[str, Any] | None = None
     operating_point: dict[str, Any] | None = None
+    gate_report: dict[str, Any] | None = None
 
 
 @dataclass
@@ -56,6 +57,25 @@ def _check_entry_matches(when: dict[str, Any], ctx: RuleContext) -> bool:
         if op.get(key) != expected:
             return False
     return True
+
+
+def _gate_waveform_rows(gate_report: dict | None) -> list[dict[str, Any]]:
+    if not gate_report:
+        return []
+    rows: list[dict[str, Any]] = []
+    for entry in gate_report.get("entries") or []:
+        if entry.get("waveform_comparison") or entry.get("rmse") is not None:
+            rows.append(
+                {
+                    "id": entry.get("reference"),
+                    "rmse": entry.get("rmse"),
+                    "waveform": entry.get("waveform_comparison"),
+                    "waveform_status": entry.get("waveform_status"),
+                }
+            )
+    for comp in gate_report.get("comparisons") or []:
+        rows.append(comp)
+    return rows
 
 
 def _find_check_value(sim_report: dict | None, signal: str, metric: str) -> float | None:
@@ -117,6 +137,39 @@ def _evaluate_limit(rule: RuleDef, ctx: RuleContext) -> tuple[bool, str]:
         if float(yield_pct) < min_pct:
             return False, f"yield {float(yield_pct):g}% below min {min_pct:g}%"
         return True, f"yield {float(yield_pct):g}% >= {min_pct:g}%"
+
+    if ltype == "waveform_rmse_lte":
+        max_v = float(limit.get("max_v", limit.get("max", 0.2)))
+        probe_id = limit.get("probe_id") or limit.get("id")
+        rows = _gate_waveform_rows(ctx.gate_report)
+        if probe_id:
+            rows = [r for r in rows if r.get("id") == probe_id]
+        if not rows:
+            return False, "no waveform comparison in gate report"
+        worst = max(float(r.get("rmse") or float("inf")) for r in rows)
+        if worst > max_v:
+            return False, f"RMSE {worst:g} V exceeds max {max_v:g} V"
+        return True, f"RMSE {worst:g} V <= {max_v:g} V"
+
+    if ltype == "correlation_gte":
+        min_corr = float(limit.get("min", 0.8))
+        probe_id = limit.get("probe_id") or limit.get("id")
+        rows = _gate_waveform_rows(ctx.gate_report)
+        if probe_id:
+            rows = [r for r in rows if r.get("id") == probe_id]
+        if not rows:
+            return False, "no waveform comparison in gate report"
+        corrs = [
+            float(r["waveform"]["correlation"])
+            for r in rows
+            if r.get("waveform") and r["waveform"].get("correlation") is not None
+        ]
+        if not corrs:
+            return False, "no correlation values in gate report"
+        worst = min(corrs)
+        if worst < min_corr:
+            return False, f"correlation {worst:g} below min {min_corr:g}"
+        return True, f"correlation {worst:g} >= {min_corr:g}"
 
     return False, f"unknown limit type {ltype!r}"
 
