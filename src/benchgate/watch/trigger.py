@@ -55,7 +55,11 @@ def _file_hash(path: Path) -> str:
 def design_files(design_dir: Path) -> list[Path]:
     files: list[Path] = []
     for pattern in WATCH_GLOBS:
-        files.extend(design_dir.rglob(pattern))
+        for path in design_dir.rglob(pattern):
+            # KiCad autosave / local history must not retrigger the pipeline.
+            if any(part.startswith(".") for part in path.relative_to(design_dir).parts):
+                continue
+            files.append(path)
     return sorted(files)
 
 

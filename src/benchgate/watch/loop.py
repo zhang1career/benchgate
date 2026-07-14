@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 from benchgate.watch.trigger import watch_once
+
+logger = logging.getLogger(__name__)
 
 
 def watch_loop(
@@ -47,35 +50,55 @@ def watch_loop(
     }
 
     while max_iterations is None or iterations < max_iterations:
-        result = watch_once(
-            design_dir,
-            manifest_path=manifest_path,
-            models_dir=models_dir,
-            reports_dir=reports_dir,
-            state_path=state_path,
-            sim_profile_path=sim_profile_path,
-            profile=profile,
-            subckt_dir=subckt_dir,
-            global_models_dir=global_models_dir,
-            blocks_yaml=blocks_yaml,
-            tmp_dir=tmp_dir,
-            run_pipeline=run_pipeline,
-            run_sim=run_sim,
-            run_gate=run_gate,
-            run_auto_capture=run_auto_capture,
-            auto_capture_dry_run=auto_capture_dry_run,
-            run_tolerance=run_tolerance,
-            tolerance_samples=tolerance_samples,
-            tolerance_strategy=tolerance_strategy,
-            tolerance_seed=tolerance_seed,
-            tolerance_jobs=tolerance_jobs,
-        )
+        try:
+            result = watch_once(
+                design_dir,
+                manifest_path=manifest_path,
+                models_dir=models_dir,
+                reports_dir=reports_dir,
+                state_path=state_path,
+                sim_profile_path=sim_profile_path,
+                profile=profile,
+                subckt_dir=subckt_dir,
+                global_models_dir=global_models_dir,
+                blocks_yaml=blocks_yaml,
+                tmp_dir=tmp_dir,
+                run_pipeline=run_pipeline,
+                run_sim=run_sim,
+                run_gate=run_gate,
+                run_auto_capture=run_auto_capture,
+                auto_capture_dry_run=auto_capture_dry_run,
+                run_tolerance=run_tolerance,
+                tolerance_samples=tolerance_samples,
+                tolerance_strategy=tolerance_strategy,
+                tolerance_seed=tolerance_seed,
+                tolerance_jobs=tolerance_jobs,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep polling across transient export/sim failures
+            logger.exception("watch_once failed; continuing poll loop")
+            result = {
+                "ran_at": None,
+                "changed_files": [],
+                "triggered_sessions": [],
+                "error": f"{type(exc).__name__}: {exc}",
+            }
         iterations += 1
         last_result["iterations"] = iterations
         last_result["last"] = result
 
-        if result.get("changed_files") or result.get("triggered_sessions"):
+        if result.get("changed_files") or result.get("triggered_sessions") or result.get("error"):
             last_result.setdefault("runs", []).append(result)
+            if result.get("error"):
+                print(f"[watch] error: {result['error']}", flush=True)
+            elif not result.get("skipped"):
+                sim = result.get("sim") or {}
+                gate = (result.get("gate") or {}).get("summary") or {}
+                print(
+                    f"[watch] triggered files={len(result.get('changed_files') or [])} "
+                    f"ngspice_ok={sim.get('ngspice_ok')} "
+                    f"spec_failures={gate.get('spec_failures')}",
+                    flush=True,
+                )
 
         if result.get("changed_files") and debounce_s > 0:
             time.sleep(debounce_s)
