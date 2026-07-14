@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from benchgate.instruments.types import QuantityKind, ScalarSeries, Waveform
+from benchgate.instruments.types import QuantityKind, ScalarSeries, Spectrum, Waveform
 
 _TS_FMT = "%Y%m%dT%H%M%SZ"
 
@@ -54,7 +54,7 @@ def _parse_iso(text: str) -> datetime:
 @dataclass
 class ChannelMeta:
     name: str
-    kind: str  # "waveform" | "scalar_series"
+    kind: str  # "waveform" | "scalar_series" | "spectrum"
     path: str
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -142,6 +142,7 @@ class LabDataStore:
         kicad_key: str | None = None,
         design: str | None = None,
         waveforms: dict[str, Waveform] | None = None,
+        spectra: dict[str, Spectrum] | None = None,
         scalar_series: dict[str, ScalarSeries] | None = None,
         derived: dict[str, float] | None = None,
         roles: dict[str, str | None] | None = None,
@@ -174,6 +175,27 @@ class LabDataStore:
                         "sample_rate_hz": wf.sample_rate_hz,
                         "t0_utc": _iso(wf.timestamp),
                         "n": len(wf),
+                    },
+                )
+            )
+
+        for name, spec in (spectra or {}).items():
+            fname = f"{name}.npz"
+            np.savez_compressed(
+                sdir / fname,
+                freq_hz=spec.freq_hz,
+                amplitude_dbm=spec.amplitude_dbm,
+            )
+            channels.append(
+                ChannelMeta(
+                    name=name,
+                    kind="spectrum",
+                    path=fname,
+                    extra={
+                        "trace": spec.trace,
+                        "t0_utc": _iso(spec.timestamp),
+                        "n": len(spec),
+                        **({k: v for k, v in spec.metadata.items()} if spec.metadata else {}),
                     },
                 )
             )
@@ -304,6 +326,38 @@ class LabDataStore:
             raw_adc=raw,
         )
 
+    def load_spectrum(
+        self,
+        session_id: str,
+        channel: str = "sa_trace",
+        *,
+        f_start_hz: float | None = None,
+        f_end_hz: float | None = None,
+    ) -> Spectrum:
+        meta = self.get_session(session_id)
+        ch = meta.channel(channel)
+        if ch is None or ch.kind != "spectrum":
+            raise KeyError(f"No spectrum channel {channel!r} in session {session_id!r}")
+        with np.load(meta.path / ch.path) as npz:
+            f = npz["freq_hz"]
+            a = npz["amplitude_dbm"]
+        if f_start_hz is not None or f_end_hz is not None:
+            lo = f_start_hz if f_start_hz is not None else -np.inf
+            hi = f_end_hz if f_end_hz is not None else np.inf
+            mask = (f >= lo) & (f <= hi)
+            f, a = f[mask], a[mask]
+        extra = dict(ch.extra)
+        extra.pop("trace", None)
+        extra.pop("t0_utc", None)
+        extra.pop("n", None)
+        return Spectrum(
+            freq_hz=f,
+            amplitude_dbm=a,
+            timestamp=_parse_iso(ch.extra.get("t0_utc", _iso(meta.captured_at))),
+            trace=str(ch.extra.get("trace", "current")),
+            metadata=extra,
+        )
+
     def load_scalar_series(
         self,
         session_id: str,
@@ -362,6 +416,16 @@ class LabDataStore:
                     }
                 )
         return rows
+
+
+def dump_spectrum_csv(spec: Spectrum) -> str:
+    """Render a spectrum as 2-column CSV text (export helper, not the store format)."""
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["freq_hz", "amplitude_dbm"])
+    for f, a in zip(spec.freq_hz.tolist(), spec.amplitude_dbm.tolist()):
+        writer.writerow([f"{f:.9g}", f"{a:.9g}"])
+    return buf.getvalue()
 
 
 def dump_waveform_csv(wf: Waveform) -> str:

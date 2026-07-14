@@ -1,10 +1,10 @@
 """Transport layer (Bridge): isolates drivers from pyvisa / pyserial.
 
-Only two transports exist:
+Transports:
 
-* ``VisaTransport``   — message-based SCPI instruments (oscilloscope).
-* ``SerialTransport`` — raw serial; used both by passive telemetry DMMs and by
-  prompt-driven shells (TARS). Interactive framing lives in the driver, not here.
+* ``VisaTransport``        — message-based SCPI over pyvisa (oscilloscope).
+* ``SerialScpiTransport``  — SCPI framing over pyserial (HTOOL-SA8 CDC-ACM).
+* ``SerialTransport``      — raw serial; passive telemetry DMMs and TARS shell.
 
 Third-party libraries are imported lazily so the package imports without the
 optional ``[lab]`` extra installed.
@@ -13,7 +13,7 @@ optional ``[lab]`` extra installed.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from .errors import (
     InstrumentConnectionError,
@@ -29,6 +29,30 @@ def _require(module: str, extra: str = "lab"):
         raise InstrumentConnectionError(
             f"'{module}' is required; install with: pip install benchgate[{extra}]"
         ) from exc
+
+
+@runtime_checkable
+class ScpiChannel(Protocol):
+    """SCPI command channel shared by VISA and serial-SCPI transports."""
+
+    @property
+    def is_open(self) -> bool:
+        ...
+
+    def open(self) -> None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+    def write(self, cmd: str) -> None:
+        ...
+
+    def query(self, cmd: str) -> str:
+        ...
+
+    def query_block(self, cmd: str) -> bytes:
+        ...
 
 
 class VisaTransport:
@@ -107,6 +131,117 @@ class VisaTransport:
             return self._res.read_raw()
         except Exception as exc:
             raise self._wrap(exc) from exc
+
+    def query_block(self, cmd: str) -> bytes:
+        """Query returning an IEEE-488.2 definite-length arbitrary block."""
+        from .scpi import read_arbitrary_block
+
+        try:
+            self._res.write(cmd)
+            return read_arbitrary_block(lambda n: self._res.read_bytes(n))
+        except Exception as exc:
+            raise self._wrap(exc) from exc
+
+
+class SerialScpiTransport:
+    """SCPI over a USB CDC-ACM / RS-232 serial port (``\\r\\n`` framing)."""
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        baud: int = 115200,
+        timeout_s: float = 2.0,
+        read_termination: bytes = b"\r\n",
+        write_termination: str = "\r\n",
+    ) -> None:
+        self.port = port
+        self.baud = baud
+        self.timeout_s = timeout_s
+        self.read_termination = read_termination
+        self.write_termination = write_termination
+        self._ser = SerialTransport(port, baud=baud, timeout_s=timeout_s)
+
+    @property
+    def is_open(self) -> bool:
+        return self._ser.is_open
+
+    def open(self) -> None:
+        self._ser.open()
+        self.flush_input()
+        time.sleep(0.05)
+
+    def close(self) -> None:
+        self._ser.close()
+
+    def flush_input(self) -> None:
+        self._ser.flush_input()
+
+    def write(self, cmd: str) -> None:
+        text = cmd.rstrip("\r\n") + self.write_termination
+        try:
+            self._ser.write(text)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial SCPI write failed: {exc}") from exc
+
+    def query(self, cmd: str) -> str:
+        from .errors import DecodeError
+
+        self.write(cmd)
+        try:
+            raw = self._ser.read_until(self.read_termination)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial SCPI read failed: {exc}") from exc
+        if not raw:
+            raise TimeoutInstrumentError(f"no response to {cmd!r}")
+        text = raw.decode("ascii", errors="replace").strip()
+        if not text:
+            raise DecodeError(f"empty response to {cmd!r}")
+        return text
+
+    def query_block(self, cmd: str) -> bytes:
+        from .scpi import read_arbitrary_block
+
+        self.write(cmd)
+        try:
+            return read_arbitrary_block(lambda n: self._ser.read(n))
+        except Exception as exc:
+            if isinstance(exc, TransientInstrumentError):
+                raise
+            raise TransientInstrumentError(f"serial SCPI block read failed: {exc}") from exc
+
+    def query_fixed(self, cmd: str, nbytes: int) -> bytes:
+        """Read an exact byte count (SA8 sweep payloads omit the ``#N`` block header)."""
+        self.write(cmd)
+        buf = bytearray()
+        deadline = time.monotonic() + self.timeout_s
+        while len(buf) < nbytes and time.monotonic() < deadline:
+            chunk = self._ser.read(nbytes - len(buf))
+            if chunk:
+                buf.extend(chunk)
+            else:
+                time.sleep(0.01)
+        if len(buf) < nbytes:
+            raise TimeoutInstrumentError(f"short read for {cmd!r}: expected {nbytes}, got {len(buf)}")
+        return bytes(buf)
+
+    def prime_scpi(self, *, settle_s: float = 0.4) -> str:
+        """Enter SCPI mode: ``*IDN?`` must be the first command after open."""
+        from .errors import DecodeError
+
+        self.flush_input()
+        self.write("*IDN?")
+        time.sleep(settle_s)
+        try:
+            raw = self._ser.read_until(self.read_termination)
+        except Exception as exc:
+            raise TransientInstrumentError(f"serial SCPI read failed during *IDN?: {exc}") from exc
+        if not raw:
+            raise TimeoutInstrumentError("no response to *IDN?")
+        text = raw.decode("ascii", errors="replace").strip()
+        if not text:
+            raise DecodeError("empty response to *IDN?")
+        return text
 
 
 class SerialTransport:

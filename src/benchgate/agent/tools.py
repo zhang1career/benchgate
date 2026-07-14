@@ -140,6 +140,91 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "lab_sa_sweep": {
+        "description": "Capture a spectrum sweep from the SA8 (role: sa) and store a session",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string", "description": "Explicit instrument name"},
+                "center_mhz": {"type": "number"},
+                "span_mhz": {"type": "number"},
+                "start_mhz": {"type": "number"},
+                "stop_mhz": {"type": "number"},
+                "reference_dbm": {"type": "number"},
+                "attenuation": {"type": "integer"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_peak": {
+        "description": "Read on-screen peak from the SA8 (role: sa)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "mode": {"type": "string", "enum": ["AVR", "MIN", "MID", "RMS"], "description": "Peak statistic"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_floor": {
+        "description": "Read on-screen noise floor from the SA8 (role: sa)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_gen": {
+        "description": "Configure the SA8 tracking/signal generator (role: rfgen)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "enabled": {"type": "boolean"},
+                "frequency_mhz": {"type": "number"},
+                "power_dbm": {"type": "integer"},
+                "attenuator": {"type": "integer", "description": "Digital attenuator 0..63"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_cal": {
+        "description": "Start/stop S-parameter calibration on the SA8 (role: vna)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "param": {"type": "string", "enum": ["S11", "S21", "SWR"]},
+                "standard": {"type": "string", "enum": ["SHORT", "OPEN", "LOAD"]},
+                "enabled": {"type": "boolean", "description": "Enable (true) or disable (false) calibration"},
+            },
+            "required": ["design_dir", "param"],
+        },
+    },
+    "lab_sa_sparam": {
+        "description": "Capture an S-parameter history trace from the SA8 (role: vna)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "param": {"type": "string", "enum": ["S11", "S21", "SWR"], "description": "Trace label (default S21)"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "lab_query_sessions": {
         "description": "List stored capture sessions filtered by component/time/tags",
         "parameters": {

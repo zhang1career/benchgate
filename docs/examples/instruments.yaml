@@ -2,7 +2,7 @@
 # (or set BENCHGATE_HOME to relocate the config root).
 #
 # Precedence for role bindings (highest wins):
-#   CLI/Agent --scope/--dmm/--awg  >  <design>/models/lab.yaml  >  this file
+#   CLI/Agent --scope/--dmm/--awg/--sa/--rfgen/--vna  >  <design>/models/lab.yaml  >  this file
 #
 # Address overrides (machine-specific, orthogonal to role bindings):
 #   BENCHGATE_INSTRUMENT_<NAME>_ADDRESS
@@ -37,7 +37,18 @@ instruments:
       baud: 115200
       assert_dtr: true
 
+  sa8_bench:
+    driver: htool_sa8
+    transport: serial_scpi
+    address: "/dev/cu.usbmodem5A69966405321"
+    options:
+      baud: 115200
+      timeout_s: 3.0
+
 roles:
   scope: scope_main
   dmm: dmm_bench
   awg: null              # set to tars_disc when using GPIO step stimulus
+  sa: sa8_bench
+  rfgen: sa8_bench
+  vna: sa8_bench
