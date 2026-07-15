@@ -5,6 +5,7 @@
       "args": [],
       "env": {
         "BENCHGATE_HOME": "/Users/mini/.benchgate",
+        "BENCHGATE_MCP_REV": "2026-07-15-sa8",
         "PATH": "/Applications/KiCad/KiCad.app/Contents/MacOS:/usr/local/anaconda3/envs/hw/bin:/usr/local/bin:/usr/bin:/bin"
       }
     }
