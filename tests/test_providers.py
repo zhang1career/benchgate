@@ -68,6 +68,38 @@ def test_extract_existing_subckt():
     assert ".tran" not in text
 
 
+PARAM_SUBCKT_NET = """* parameterised block
+.subckt RCLP in out R_S=1k C_L=100n
+R1 in out {R_S}
+C1 out 0 {C_L}
+.ends RCLP
+"""
+
+
+def test_extract_subckt_default_params_are_not_pins():
+    """``.subckt N a b R=1k`` has two pins, not three.
+
+    Counting a default parameter as a pin makes the manifest advertise a terminal the
+    block does not have, and any netlist wired against it then fails to bind.
+    """
+    text, _warnings, sim_name, pin_names = netlist_to_subckt(
+        PARAM_SUBCKT_NET, name="RCLP", pins=None
+    )
+    assert sim_name == "RCLP"
+    assert pin_names == ["in", "out"]
+    # the parameters themselves have to survive into the emitted subckt
+    assert "R_S=1k" in text and "C_L=100n" in text
+
+
+def test_param_subckt_registers_only_real_pins(tmp_path):
+    net = tmp_path / "block.net"
+    net.write_text(PARAM_SUBCKT_NET, encoding="utf-8")
+    art = LtspiceModelProvider(net_path=net, sim_name="RCLP").build(
+        entry=None, workdir=tmp_path / "subckt"
+    )
+    assert art.sim_pins == "in out"
+
+
 def test_extracted_subckt_pins_authoritative_over_cli_pins(tmp_path):
     """Netlist header pins win over --pins in extract mode (Bugbot: sim_pins mismatch)."""
     net = tmp_path / "block.net"

@@ -45,10 +45,22 @@ instruments:
       baud: 115200
       timeout_s: 3.0
 
+  tinysa_bench:
+    driver: tinysa
+    transport: serial
+    # USB product string "tinySA" (tinysa.org); resolves via pyserial list_ports.
+    # Or set a concrete path: "/dev/cu.usbmodem4001"
+    address: "tinySA"
+    options:
+      baud: 115200
+      timeout_s: 5.0
+      points: 290
+      # dbm_offset: 128   # classic; Ultra auto-detected as 174 from `info`
+
 roles:
   scope: scope_main
   dmm: dmm_bench
   awg: null              # set to tars_disc when using GPIO step stimulus
-  sa: sa8_bench
-  rfgen: sa8_bench
-  vna: sa8_bench
+  sa: sa8_bench          # or tinysa_bench
+  rfgen: sa8_bench       # or tinysa_bench
+  vna: sa8_bench         # tinySA has no VNA capability

@@ -70,6 +70,38 @@ def test_gate_report_includes_rules_summary(tmp_path):
     assert "project-spec" in rules["packs"]
 
 
+def test_default_rule_packs_never_come_from_bundled_examples(tmp_path):
+    """docs/examples/rules is documentation, not a default.
+
+    Falling back to it made a project inherit the charge-pump example's checks,
+    and made every project inherit corp-derating-2024 whose stress rule hard-fails
+    unless the project runs stress sweeps.
+    """
+    from benchgate.rules.loader import default_rule_pack_paths
+
+    home = tmp_path / "home"
+    design = tmp_path / "design"
+    (design / "models").mkdir(parents=True)
+    (design / "models" / "blocks.yaml").write_text("blocks: []\n", encoding="utf-8")
+
+    # a design with a blocks.yaml but no rules of its own gets no rules at all
+    assert default_rule_pack_paths(home=home, design=design) == []
+
+    # its own pack is the only one applied
+    rules_dir = design / "models" / "rules"
+    rules_dir.mkdir()
+    own = rules_dir / "project-spec.yaml"
+    own.write_text("id: mine\nversion: 1\nrules: []\n", encoding="utf-8")
+    assert default_rule_pack_paths(home=home, design=design) == [own]
+
+    # site-wide packs come first, so a design pack can be read as the override
+    site_dir = home / "config" / "rules"
+    site_dir.mkdir(parents=True)
+    site = site_dir / "corp-derating.yaml"
+    site.write_text("id: corp\nversion: 1\nrules: []\n", encoding="utf-8")
+    assert default_rule_pack_paths(home=home, design=design) == [site, own]
+
+
 def test_yield_rule_warns_without_mc():
     pack = load_rule_pack(_examples_rules("project-spec.yaml"))
     ev = evaluate_rule_packs(

@@ -165,7 +165,7 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
         "manifest_path": str(p.manifest),
         "output_dir": str(out_dir),
         "profile": args.profile,
-        "metric": args.metric,
+        "metrics": list(args.metric),
         "params": params,
         "sets": sets,
     }
@@ -176,6 +176,38 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
     result = dispatch("sim_sweep", call_args)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
+
+
+def cmd_sim_block_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.sweep import parse_axis
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "block_sweep")
+    params: dict[str, list[str]] = {}
+    sets: dict[str, list[str]] = {}
+    for spec in args.param or []:
+        name, values = parse_axis(spec)
+        params[name] = values
+    for spec in args.set or []:
+        name, values = parse_axis(spec)
+        sets[name] = values
+    call_args: dict = {
+        "design_dir": str(p.design),
+        "netlist": args.netlist,
+        "output_dir": str(out_dir),
+        "metrics": list(args.metric),
+        "params": params,
+        "sets": sets,
+    }
+    if args.pass_gte is not None:
+        call_args["pass_gte"] = args.pass_gte
+    if args.pass_lte is not None:
+        call_args["pass_lte"] = args.pass_lte
+    result = dispatch("sim_block_sweep", call_args)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    points = (result.get("report") or {}).get("points") or []
+    failed = [pt for pt in points if pt.get("passed") is False]
+    return 1 if failed else 0
 
 
 def cmd_sim_diagnose(args: argparse.Namespace) -> int:
@@ -756,12 +788,41 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--manifest", default=None, help="Override manifest path")
     sw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_sweep)")
     sw.add_argument("--profile", default="default")
-    sw.add_argument("--metric", required=True, help="signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u'")
+    sw.add_argument(
+        "--metric",
+        action="append",
+        required=True,
+        help="[name=]signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u' (repeatable; "
+        "the first one decides pass/fail)",
+    )
     sw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
     sw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
     sw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
     sw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
     sw.set_defaults(func=cmd_sim_sweep)
+    bsw = sim_sub.add_parser(
+        "block-sweep",
+        help="Sweep a standalone block testbench .cir (no KiCad project, no sim profile)",
+    )
+    _add_design_arg(bsw)
+    bsw.add_argument(
+        "--netlist",
+        required=True,
+        help="Testbench .cir, absolute or relative to <design> (e.g. models/blocks/input_buffer_tb.cir)",
+    )
+    bsw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/block_sweep)")
+    bsw.add_argument(
+        "--metric",
+        action="append",
+        required=True,
+        help="[name=]signal[:metric[:window_after]], e.g. 'bw=v(com):bw_3db' (repeatable; "
+        "the first one decides pass/fail)",
+    )
+    bsw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
+    bsw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
+    bsw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
+    bsw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
+    bsw.set_defaults(func=cmd_sim_block_sweep)
     sc = sim_sub.add_parser("cosim", help="Closed-loop cosim with firmware control.c")
     _add_design_arg(sc)
     sc.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
@@ -1010,7 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
     lqw.add_argument("--out", default=None, help="Export to CSV")
     lqw.set_defaults(func=cmd_lab_query_waveform)
 
-    lsa = lab_sub.add_parser("sa", help="HTOOL SA8 spectrum analyzer / RF source / VNA")
+    lsa = lab_sub.add_parser("sa", help="Spectrum analyzer / RF source / VNA (SA8, tinySA, …)")
     sa_sub = lsa.add_subparsers(dest="lab_sa_cmd", required=True)
 
     lsas = sa_sub.add_parser("sweep", help="Capture spectrum sweep (role: sa)")

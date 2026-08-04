@@ -30,6 +30,7 @@ from .errors import CapabilityError, ConfigError
 from .drivers.htool_sa8 import HtoolSA8
 from .drivers.rigol_ds1104 import DS1104Scope
 from .drivers.tars_shell import TarsStimulus
+from .drivers.tinysa import TinySA
 from .drivers.uni_t_ut61e import UT61EDmm
 
 DRIVER_REGISTRY: dict[str, type[Instrument]] = {
@@ -37,6 +38,7 @@ DRIVER_REGISTRY: dict[str, type[Instrument]] = {
     "uni_t_ut61e": UT61EDmm,
     "tars_shell": TarsStimulus,
     "htool_sa8": HtoolSA8,
+    "tinysa": TinySA,
 }
 
 ROLES = tuple(ROLE_CAPABILITY.keys())

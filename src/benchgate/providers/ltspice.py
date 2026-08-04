@@ -11,6 +11,7 @@ Output: a normalized ngspice ``.subckt`` ``.lib`` + provenance.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -92,7 +93,12 @@ def _is_element(line: str) -> bool:
 
 
 def _extract_subckt(lines: list[str]) -> tuple[str, list[str], list[str]] | None:
-    """If a ``.subckt`` block exists, return (name, pin_names, block_lines)."""
+    """If a ``.subckt`` block exists, return (name, pin_names, block_lines).
+
+    Default parameters may follow the pins (``.subckt BUF IN OUT R_ISO=100``). They are
+    not pins, and counting them as pins would make the manifest advertise terminals the
+    block does not have, so pin collection stops at the first ``NAME=value`` token.
+    """
     start = None
     header = ""
     for i, line in enumerate(lines):
@@ -105,7 +111,7 @@ def _extract_subckt(lines: list[str]) -> tuple[str, list[str], list[str]] | None
         return None
     parts = header.split()
     name = parts[1] if len(parts) > 1 else "SUBCKT"
-    pins = parts[2:] if len(parts) > 2 else []
+    pins = list(itertools.takewhile(lambda tok: "=" not in tok, parts[2:]))
     block = [lines[start]]
     for line in lines[start + 1 :]:
         block.append(line)

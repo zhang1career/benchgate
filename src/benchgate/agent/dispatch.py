@@ -568,6 +568,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         return {"ok": True, "reference": args["reference"]}
 
     if name == "sim_run":
+        from benchgate.sim.pipeline import run_project_sim
         p = _paths_for_design(args["design_dir"], args)
         mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
         if not mp.is_absolute():
@@ -634,13 +635,44 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir,
             sim_profile_path=p.sim_profile,
             profile=args.get("profile", "default"),
-            metric_spec=args["metric"],
+            metric_spec=args.get("metric"),
+            metrics=[str(m) for m in args.get("metrics") or []] or None,
             params=norm(args.get("params")),
             sets=norm(args.get("sets")),
             pass_gte=args.get("pass_gte"),
             pass_lte=args.get("pass_lte"),
         )
         return {"success": True, "report": report.to_dict()}
+
+    if name == "sim_block_sweep":
+        from benchgate.sim.sweep import run_block_sweep
+
+        p = _paths_for_design(args["design_dir"], args)
+        netlist = Path(args["netlist"])
+        if not netlist.is_absolute():
+            netlist = (p.design / netlist).resolve()
+        out_dir = Path(args["output_dir"]) if args.get("output_dir") else p.reports / "block_sweep"
+        if not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "block_sweep")
+
+        def norm_block(d: dict | None) -> dict[str, list[str]]:
+            return {k: [str(x) for x in v] for k, v in (d or {}).items()}
+
+        metrics = [str(m) for m in args.get("metrics") or []]
+        if not metrics and args.get("metric"):
+            metrics = [str(args["metric"])]
+        report = run_block_sweep(
+            netlist,
+            out_dir,
+            metrics=metrics,
+            params=norm_block(args.get("params")),
+            sets=norm_block(args.get("sets")),
+            pass_gte=args.get("pass_gte"),
+            pass_lte=args.get("pass_lte"),
+        )
+        payload = report.to_dict()
+        failed = [pt for pt in payload["points"] if pt.get("passed") is False]
+        return {"success": not failed, "report": payload}
 
     if name == "sim_cosim":
         from benchgate.cosim.runner import run_cosim

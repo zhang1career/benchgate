@@ -7,6 +7,7 @@ deep inheritance tree. A driver implements the subset it supports:
 * UT61E    -> ScalarReader (read-only telemetry; not configurable)
 * TARS     -> DigitalStimulus (3.3 V logic levels; amplitude is not settable)
 * HTOOL SA8 -> SpectrumAnalyzer + RFSource + VectorAnalyzer
+* tinySA   -> SpectrumAnalyzer + RFSource (no VNA)
 
 ``PwmStimulus`` is reserved for when the TARS firmware wires up general PWM
 (``mcu tim`` is currently a stub); no driver implements it yet.

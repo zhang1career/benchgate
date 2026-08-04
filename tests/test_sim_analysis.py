@@ -107,6 +107,86 @@ def test_evaluate_expression_check(tmp_path: Path) -> None:
     assert np.isclose(report.checks[0].value, 9.0)
 
 
+def _write_ac_raw(path: Path, freq: np.ndarray, named: dict[str, np.ndarray]) -> None:
+    """Write an AC-analysis raw file: Flags: complex, two doubles per value."""
+    lines = ["\t0\tfrequency\tfrequency\n"]
+    for i, name in enumerate(named, start=1):
+        lines.append(f"\t{i}\t{name}\tvoltage\n")
+    header = (
+        "Title: test\n"
+        "Plotname: AC Analysis\n"
+        "Flags: complex\n"
+        f"No. Variables: {len(named) + 1}\n"
+        f"No. Points: {len(freq)}\n"
+        "Variables:\n" + "".join(lines) + "Binary:\n"
+    )
+    columns = [freq.astype("<c16")] + [v.astype("<c16") for v in named.values()]
+    matrix = np.column_stack(columns).astype("<c16")
+    path.write_bytes(header.encode("latin-1") + matrix.tobytes())
+
+
+def test_parse_ac_raw_returns_frequency_and_complex_signals(tmp_path: Path) -> None:
+    """A complex raw file must not be read as real doubles.
+
+    Doing so does not fail, it interleaves real and imaginary parts into the
+    neighbouring variable, so the header flag has to be honoured.
+    """
+    freq = np.logspace(1, 5, 41)
+    lp = 1.0 / (1.0 + 1j * freq / 1000.0)
+    raw = tmp_path / "ac.raw"
+    _write_ac_raw(raw, freq, {"v(out)": lp, "v(in)": np.ones_like(lp)})
+
+    axis, signals = parse_ngspice_raw(raw)
+    assert np.allclose(axis, freq)
+    assert np.iscomplexobj(signals["v(out)"])
+    assert np.allclose(signals["v(out)"], lp)
+
+
+def test_ac_bandwidth_and_peaking_metrics(tmp_path: Path) -> None:
+    from benchgate.sim.analysis import _compute_metric
+
+    freq = np.logspace(1, 6, 2001)
+    # first-order low-pass, -3 dB at exactly 1 kHz, no peaking
+    lp = 1.0 / (1.0 + 1j * freq / 1000.0)
+    # second-order, Q = 3.162: peak 20*log10(Q/sqrt(1-1/(4Q^2))) = 10.110 dB
+    q, fn = np.sqrt(10.0), 5000.0
+    s = 1j * freq / fn
+    peaked = 1.0 / (1.0 + s / q + s**2)
+
+    raw = tmp_path / "ac.raw"
+    _write_ac_raw(raw, freq, {"v(lp)": lp, "v(pk)": peaked, "v(flat)": np.ones_like(lp)})
+    axis, sig = parse_ngspice_raw(raw)
+
+    assert np.isclose(_compute_metric(sig["v(lp)"], "bw_3db", axis=axis), 1000.0, rtol=2e-3)
+    assert np.isclose(_compute_metric(sig["v(lp)"], "peaking_db", axis=axis), 0.0, atol=1e-6)
+
+    peak_db = 20.0 * np.log10(q / np.sqrt(1.0 - 1.0 / (4.0 * q**2)))
+    assert np.isclose(_compute_metric(sig["v(pk)"], "peaking_db", axis=axis), peak_db, atol=0.01)
+    f_3db = fn * np.sqrt(
+        1.0 - 1.0 / (2.0 * q**2) + np.sqrt(1.0 / (4.0 * q**4) - 1.0 / q**2 + 2.0)
+    )
+    assert np.isclose(_compute_metric(sig["v(pk)"], "bw_3db", axis=axis), f_3db, rtol=2e-3)
+
+    # a response that never falls 3 dB has no bandwidth inside the swept range
+    assert _compute_metric(sig["v(flat)"], "bw_3db", axis=axis) == float("inf")
+    # and bw_3db without an axis cannot be computed rather than being guessed
+    assert np.isnan(_compute_metric(sig["v(lp)"], "bw_3db"))
+
+
+def test_ac_time_domain_metric_falls_back_to_magnitude(tmp_path: Path) -> None:
+    from benchgate.sim.analysis import _compute_metric
+
+    freq = np.array([10.0, 100.0, 1000.0])
+    values = np.array([3.0 + 4.0j, 0.0 + 1.0j, -2.0 + 0.0j])
+    raw = tmp_path / "ac.raw"
+    _write_ac_raw(raw, freq, {"v(out)": values})
+    _, sig = parse_ngspice_raw(raw)
+
+    assert np.isclose(_compute_metric(sig["v(out)"], "max"), 5.0)
+    assert np.isclose(_compute_metric(sig["v(out)"], "min"), 1.0)
+    assert np.isclose(_compute_metric(sig["v(out)"], "final"), 2.0)
+
+
 def test_resolve_branch_current_alias() -> None:
     from benchgate.sim.analysis import _resolve_signal
 

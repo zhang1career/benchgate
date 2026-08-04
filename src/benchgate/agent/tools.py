@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 
+# Spelled out rather than imported from benchgate.sim.analysis, which would pull numpy
+# into every MCP handshake. test_agent_tools keeps the two in step.
+_METRIC_NAMES = (
+    "min, max, avg, rms, pp, final, bw_3db, peaking_db, gain_db_max, gain_db_first"
+)
+
 TOOLS: dict[str, dict[str, Any]] = {
     "mapping_sync": {
         "description": "Scan KiCad schematic and update models/manifest.yaml",
@@ -141,7 +147,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_sweep": {
-        "description": "Capture a spectrum sweep from the SA8 (role: sa) and store a session",
+        "description": "Capture a spectrum sweep from the bound SA (role: sa; SA8/tinySA/…) and store a session",
         "parameters": {
             "type": "object",
             "properties": {
@@ -160,7 +166,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_peak": {
-        "description": "Read on-screen peak from the SA8 (role: sa)",
+        "description": "Read on-screen peak from the bound SA (role: sa)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -172,7 +178,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_floor": {
-        "description": "Read on-screen noise floor from the SA8 (role: sa)",
+        "description": "Read noise floor from the bound SA (role: sa)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -183,7 +189,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_gen": {
-        "description": "Configure the SA8 tracking/signal generator (role: rfgen)",
+        "description": "Configure the bound RF/tracking generator (role: rfgen; SA8/tinySA/…)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -198,7 +204,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_cal": {
-        "description": "Start/stop S-parameter calibration on the SA8 (role: vna)",
+        "description": "Start/stop S-parameter calibration on the bound VNA (role: vna; SA8)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -212,7 +218,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_sa_sparam": {
-        "description": "Capture an S-parameter history trace from the SA8 (role: vna)",
+        "description": "Capture an S-parameter history trace from the bound VNA (role: vna; SA8)",
         "parameters": {
             "type": "object",
             "properties": {
@@ -314,9 +320,9 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "sim_sweep": {
         "description": (
-            "Run a sim profile over a grid of overrides and collect one metric per point. "
+            "Run a sim profile over a grid of overrides and collect metrics per point. "
             "Axes: params (override .param NAME) and sets (override an element value, e.g. R11). "
-            "Metric spec is 'signal[:metric[:window_after]]' (metric: min/max/avg/rms/pp/final)."
+            "Metric spec is '[name=]signal[:metric[:window_after]]'."
         ),
         "parameters": {
             "type": "object",
@@ -325,13 +331,55 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_dir": {"type": "string"},
                 "profile": {"type": "string"},
-                "metric": {"type": "string", "description": "e.g. 'v(n_hdr):min:250u'"},
+                "metric": {"type": "string", "description": "single metric, e.g. 'v(n_hdr):min:250u'"},
+                "metrics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "several metrics off one run per point; the first decides pass/fail. "
+                        f"metric names: {_METRIC_NAMES}"
+                    ),
+                },
                 "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
                 "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
                 "pass_gte": {"type": "number", "description": "Mark point passed if metric >= this"},
                 "pass_lte": {"type": "number", "description": "Mark point passed if metric <= this"},
             },
-            "required": ["design_dir", "profile", "metric"],
+            "required": ["design_dir", "profile"],
+        },
+    },
+    "sim_block_sweep": {
+        "description": (
+            "Sweep a standalone block testbench .cir over a grid of overrides — no KiCad "
+            "project and no sim_profiles.yaml needed. Use this to characterise a block from "
+            "models/blocks/ on its own (and to produce the numbers that go into blocks.yaml "
+            "metrics) before the board has a schematic. The testbench owns its stimulus and "
+            ".control block, so an AC run is just an 'ac dec ...' line in it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "netlist": {
+                    "type": "string",
+                    "description": "Testbench .cir, absolute or relative to design_dir",
+                },
+                "output_dir": {"type": "string"},
+                "metrics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "'[name=]signal[:metric[:window_after]]', e.g. 'bw=v(com):bw_3db'. "
+                        "The first decides pass/fail. All are evaluated off one run per point. "
+                        f"metric names: {_METRIC_NAMES}"
+                    ),
+                },
+                "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
+                "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
+                "pass_gte": {"type": "number", "description": "Mark point passed if first metric >= this"},
+                "pass_lte": {"type": "number", "description": "Mark point passed if first metric <= this"},
+            },
+            "required": ["design_dir", "netlist", "metrics"],
         },
     },
     "sim_cosim": {
@@ -362,6 +410,11 @@ TOOLS: dict[str, dict[str, Any]] = {
                 },
                 "stress_sweep": {"type": "boolean", "description": "Run profile stress_sweep first"},
                 "profile": {"type": "string", "description": "sim_profiles.yaml block for stress_sweep"},
+                "rules": {
+                    "type": "string",
+                    "enum": ["auto", "none"],
+                    "description": "auto (default) = $BENCHGATE_HOME/config/rules + design models/rules; none = skip rule packs and report spec only",
+                },
             },
             "required": ["design_dir"],
         },
