@@ -29,7 +29,7 @@ def _paths_for_design(design_dir: str | Path, args: dict[str, Any]):
 
 
 def _role_overrides(args: dict[str, Any]) -> dict[str, str | None]:
-    return {role: args[role] for role in ("scope", "dmm", "awg") if args.get(role)}
+    return {role: args[role] for role in ("scope", "dmm", "awg", "sa", "rfgen", "vna") if args.get(role)}
 
 
 def _open_bench(paths, args: dict[str, Any]):
@@ -63,6 +63,18 @@ def _resolve_provenance_dict(args: dict[str, Any], key: str, existing: dict | No
 def dispatch(name: str, args: dict[str, Any]) -> Any:
     if name not in TOOLS:
         raise KeyError(f"Unknown tool: {name}")
+
+    if name == "benchgate_version":
+        import benchgate
+
+        from benchgate.agent.tools import TOOLS as _TOOLS
+
+        return {
+            "version": benchgate.__version__,
+            "install_path": str(Path(benchgate.__file__).resolve().parent),
+            "tool_count": len(_TOOLS),
+            "tools": sorted(_TOOLS.keys()),
+        }
 
     if name == "mapping_sync":
         p = _paths_for_design(args["design_dir"], args)
@@ -328,6 +340,164 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             "path": str((meta.path or p.captured) / "scope_ch1.npz"),
         }
 
+    if name == "lab_sa_sweep":
+        from benchgate.instruments.types import ScanConfig
+
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="sa", instrument=args.get("instrument"))
+        store = LabDataStore(p.captured)
+        try:
+            cfg = ScanConfig(
+                center_mhz=args.get("center_mhz"),
+                span_mhz=args.get("span_mhz"),
+                start_mhz=args.get("start_mhz"),
+                stop_mhz=args.get("stop_mhz"),
+                reference_dbm=args.get("reference_dbm"),
+                attenuation=args.get("attenuation"),
+            )
+            if any(
+                v is not None
+                for v in (
+                    cfg.center_mhz,
+                    cfg.span_mhz,
+                    cfg.start_mhz,
+                    cfg.stop_mhz,
+                    cfg.reference_dbm,
+                    cfg.attenuation,
+                )
+            ):
+                inst.configure_scan(cfg)  # type: ignore[attr-defined]
+            spec = inst.capture_spectrum()  # type: ignore[attr-defined]
+            meta = store.write_session(
+                component_ref=args.get("component_ref"),
+                design=str(p.design),
+                spectra={"sa_trace": spec},
+                roles={"sa": bench.instrument_for_role("sa")},
+                instruments={"sa": inst.info.as_provenance("sa").get("sa_idn", inst.identify())},
+                tags=args.get("tags"),
+            )
+        finally:
+            inst.disconnect()
+        return {
+            "session_id": meta.session_id,
+            "trace": spec.trace,
+            "points": len(spec),
+            "freq_start_hz": float(spec.freq_hz[0]) if len(spec) else None,
+            "freq_stop_hz": float(spec.freq_hz[-1]) if len(spec) else None,
+            "path": str((meta.path or p.captured) / "sa_trace.npz"),
+            "metadata": spec.metadata,
+        }
+
+    if name == "lab_sa_peak":
+        from benchgate.instruments.types import PeakMode
+
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="sa", instrument=args.get("instrument"))
+        try:
+            mode = PeakMode(args.get("mode", "AVR"))
+            r = inst.measure_peak(mode)  # type: ignore[attr-defined]
+        finally:
+            inst.disconnect()
+        return {
+            "instrument": inst.name,
+            "peak": {
+                "value": r.value,
+                "unit": r.unit,
+                "mode": mode.value,
+                "timestamp": r.timestamp.isoformat(),
+            },
+        }
+
+    if name == "lab_sa_floor":
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="sa", instrument=args.get("instrument"))
+        try:
+            r = inst.measure_floor()  # type: ignore[attr-defined]
+        finally:
+            inst.disconnect()
+        return {
+            "instrument": inst.name,
+            "floor": {
+                "value": r.value,
+                "unit": r.unit,
+                "timestamp": r.timestamp.isoformat(),
+            },
+        }
+
+    if name == "lab_sa_gen":
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="rfgen", instrument=args.get("instrument"))
+        try:
+            if "enabled" in args:
+                inst.set_generator_enabled(bool(args["enabled"]))  # type: ignore[attr-defined]
+            if args.get("frequency_mhz") is not None:
+                inst.set_generator_frequency_mhz(float(args["frequency_mhz"]))  # type: ignore[attr-defined]
+            if args.get("power_dbm") is not None:
+                inst.set_generator_power_dbm(int(args["power_dbm"]))  # type: ignore[attr-defined]
+            if args.get("attenuator") is not None:
+                inst.set_generator_attenuator(int(args["attenuator"]))  # type: ignore[attr-defined]
+            status = {
+                "enabled": inst.query_generator_enabled(),  # type: ignore[attr-defined]
+                "frequency_mhz": inst.query_generator_frequency_mhz(),  # type: ignore[attr-defined]
+            }
+        finally:
+            inst.disconnect()
+        return {"instrument": inst.name, "generator": status}
+
+    if name == "lab_sa_cal":
+        from benchgate.instruments.types import CalStandard, SparamKind
+
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="vna", instrument=args.get("instrument"))
+        try:
+            param = SparamKind(args["param"])
+            standard = CalStandard(args.get("standard", "OPEN"))
+            enabled = bool(args.get("enabled", True))
+            inst.calibrate_sparam(param, standard, enabled=enabled)  # type: ignore[attr-defined]
+        finally:
+            inst.disconnect()
+        return {
+            "instrument": inst.name,
+            "calibration": {
+                "param": param.value,
+                "standard": standard.value,
+                "enabled": enabled,
+            },
+        }
+
+    if name == "lab_sa_sparam":
+        from benchgate.instruments.types import SparamKind
+
+        p = _paths_for_design(args["design_dir"], args)
+        bench = _open_bench(p, args)
+        inst = bench.select(role="vna", instrument=args.get("instrument"))
+        store = LabDataStore(p.captured)
+        try:
+            param = SparamKind(args.get("param", "S21"))
+            spec = inst.capture_sparam_trace(param)  # type: ignore[attr-defined]
+            meta = store.write_session(
+                component_ref=args.get("component_ref"),
+                design=str(p.design),
+                spectra={f"sa_{param.value.lower()}": spec},
+                roles={"vna": bench.instrument_for_role("vna")},
+                instruments={"vna": inst.info.as_provenance("vna").get("vna_idn", inst.identify())},
+                tags=args.get("tags"),
+            )
+        finally:
+            inst.disconnect()
+        return {
+            "session_id": meta.session_id,
+            "param": param.value,
+            "points": len(spec),
+            "path": str((meta.path or p.captured) / f"sa_{param.value.lower()}.npz"),
+            "metadata": spec.metadata,
+        }
+
     if name == "lab_query_sessions":
         p = _paths_for_design(args["design_dir"], args)
         store = LabDataStore(p.captured)
@@ -410,6 +580,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         return {"ok": True, "reference": args["reference"]}
 
     if name == "sim_run":
+        from benchgate.sim.pipeline import run_project_sim
         p = _paths_for_design(args["design_dir"], args)
         mp = Path(args["manifest_path"]) if args.get("manifest_path") else p.manifest
         if not mp.is_absolute():
@@ -476,13 +647,44 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir,
             sim_profile_path=p.sim_profile,
             profile=args.get("profile", "default"),
-            metric_spec=args["metric"],
+            metric_spec=args.get("metric"),
+            metrics=[str(m) for m in args.get("metrics") or []] or None,
             params=norm(args.get("params")),
             sets=norm(args.get("sets")),
             pass_gte=args.get("pass_gte"),
             pass_lte=args.get("pass_lte"),
         )
         return {"success": True, "report": report.to_dict()}
+
+    if name == "sim_block_sweep":
+        from benchgate.sim.sweep import run_block_sweep
+
+        p = _paths_for_design(args["design_dir"], args)
+        netlist = Path(args["netlist"])
+        if not netlist.is_absolute():
+            netlist = (p.design / netlist).resolve()
+        out_dir = Path(args["output_dir"]) if args.get("output_dir") else p.reports / "block_sweep"
+        if not out_dir.is_absolute():
+            out_dir = resolve_project_path(p.design, out_dir, p.reports / "block_sweep")
+
+        def norm_block(d: dict | None) -> dict[str, list[str]]:
+            return {k: [str(x) for x in v] for k, v in (d or {}).items()}
+
+        metrics = [str(m) for m in args.get("metrics") or []]
+        if not metrics and args.get("metric"):
+            metrics = [str(args["metric"])]
+        report = run_block_sweep(
+            netlist,
+            out_dir,
+            metrics=metrics,
+            params=norm_block(args.get("params")),
+            sets=norm_block(args.get("sets")),
+            pass_gte=args.get("pass_gte"),
+            pass_lte=args.get("pass_lte"),
+        )
+        payload = report.to_dict()
+        failed = [pt for pt in payload["points"] if pt.get("passed") is False]
+        return {"success": not failed, "report": payload}
 
     if name == "sim_cosim":
         from benchgate.cosim.runner import run_cosim
@@ -555,6 +757,8 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             rule_pack_paths=rule_pack_paths,
             sim_profile_path=p.sim_profile,
             profile=profile,
+            design_dir=p.design,
+            blocks_yaml=p.blocks_yaml,
         )
         return report.to_dict()
 

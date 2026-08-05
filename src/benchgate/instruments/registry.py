@@ -10,7 +10,7 @@ Configuration precedence (highest wins):
   capture defaults.
 * CLI/Agent ``--instrument`` / ``--role`` parameters override both.
 
-A *role* (scope/dmm/awg) is a logical use mapped to one instrument; a verb in
+A *role* (scope/dmm/awg/sa/rfgen/vna) is a logical use mapped to one instrument; a verb in
 the CLI selects an instrument by capability, never by device type guesswork.
 """
 
@@ -27,14 +27,18 @@ import yaml
 from .base import Instrument
 from .capabilities import ROLE_CAPABILITY
 from .errors import CapabilityError, ConfigError
+from .drivers.htool_sa8 import HtoolSA8
 from .drivers.rigol_ds1104 import DS1104Scope
 from .drivers.tars_shell import TarsStimulus
+from .drivers.tinysa import TinySA
 from .drivers.uni_t_ut61e import UT61EDmm
 
 DRIVER_REGISTRY: dict[str, type[Instrument]] = {
     "rigol_ds1104z": DS1104Scope,
     "uni_t_ut61e": UT61EDmm,
     "tars_shell": TarsStimulus,
+    "htool_sa8": HtoolSA8,
+    "tinysa": TinySA,
 }
 
 ROLES = tuple(ROLE_CAPABILITY.keys())

@@ -2,7 +2,7 @@
 
 项目级待办（Agent / 维护者）。架构与里程碑见 `docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md`、`docs/MINIMUM_SCOPE.md`。
 
-**测试基线**：`pytest`（当前 185+ tests）
+**测试基线**：`pytest`（当前 220 tests）
 
 ---
 
@@ -42,6 +42,21 @@
 - [x] **`benchgate diagnose`** — 顶层 sim + gate + lab 归因；`benchgate diagnose` / Agent `diagnose`
 - [x] **实物对照分析** — `bench_compare` profile+manifest；`sim_waveform*.csv`；gate RMSE/标量；rules `waveform_rmse_lte` / `correlation_gte`
 - [x] **`lab compare`** — CLI / Agent `lab_compare_waveforms`；`watch` tagged session 触发（`anomaly` 等）
+- [x] **AC raw 复数解析** — `Flags: complex` 从前被当实数读，交错实/虚部到相邻变量，**不报错**；`parse_ngspice_raw` 现按 flag 读 `complex128`
+- [x] **频域 metric 原语** — `bw_3db` / `peaking_db` / `gain_db_max` / `gain_db_first`；对解析 RLC 验证
+- [x] **`sim block-sweep`** — 独立 block testbench 扫描，不需 KiCad 工程 / `sim_profiles.yaml`；`--metric` 可重复，每点一次仿真取多 metric
+- [x] **参数化 `.subckt` 提取** — pin 后的默认参数从前被当 pin 计入 manifest `sim_pins`
+- [x] **rule pack 默认回退** — 从前无 `models/rules/` 时静默加载 `docs/examples/rules`（含 `corp-derating-2024`，无 stress sweep 即硬失败）；默认只取 `$BENCHGATE_HOME/config/rules` + 设计自己的 `models/rules`，并加 `gate report --rules none`
+
+- [x] **瞬态 metric 原语** — `settling_time*` / `overshoot_pct` / `slew_rate` / `integral` / `charge_nc`；checks 与 block-sweep 可用
+- [x] **block measures + pipeline sync** — `blocks.yaml` 的 `testbench` + `measures` → `run_block_measures` → 写 `metrics_file`
+- [x] **sweep 聚合 + rule** — `block_sweep_report.json` 含 `aggregates`；rules `sweep_metric_max_lte` / `sweep_metric_min_gte`
+- [x] **MCP 版本探测** — Agent 工具 `benchgate_version`（version / tool_count / tools）
+- [x] **gate 覆盖率 + ERC** — `coverage_warnings` + 自动读 `*.erc.rpt`
+- [x] **`benchgate init`** — 脚手架 `models/blocks.yaml`、`models/rules/project-spec.yaml`、`models/lab.yaml`
+
+- [ ] **block metrics 自动派生** — 瞬态 study（kickback/settling/crosstalk）仍需独立 tran testbench；`run_sims.py` 待迁入
+- [ ] **瞬态多点 measure** — 单次 testbench 已支持多 alias；复杂 study 仍要外部脚本或多 testbench
 
 ---
 
@@ -76,3 +91,18 @@
 
 - [ ] **`design/myboard/models/blocks.yaml`** — 仓库内可跑模板（现 `docs/examples/blocks.yaml`）
 - [ ] **charge-pump** — VOUT ~20 V 设计收敛；Q2 ic_peak 信息性 warn；批量写 Sim.* 到原理图
+
+---
+
+## Lab · 数字总线 timing 表征（待做）
+
+> 动机：固件/协议联调（如 TARS soft-I²C）仍以示波器交互为主；benchgate 不替代示波器或 USB shell，
+> 只把 **可复现时序证据 → metrics → gate** 接进「表征 → 模型/spec → 签核」脊柱。
+> 目标仪器示例：Rigol DS1104Z Plus + 逻辑探头（RPL1116）+（可选）I²C 解码。
+
+- [ ] **`lab` 数字通道 / 总线采数** — 在现有 `lab capture` / `lab_capture_waveform` 之上支持 MSO 数字通道（或 SCL/SDA 绑定）；session 入库 `captured/sessions`，tags 如 `bus=i2c`
+- [ ] **I²C / 总线 timing metrics** — 从波形或边沿表提取可 gate 的标量（例：`f_scl`、`t_r`/`t_f`、`t_stop_to_start`、ACK 窗口、时钟拉伸上限）；**不做**完整协议栈 / 寄存器 walk / 固件调试
+- [ ] **manifest / lab 配置：bus interface spec** — 设计侧声明时序预算（与 pinmap / 网名绑定，如 `SCL`/`SDA`↔通道）；未知或 LITE 类约束可引用常量表，但不复制 MCU 协议实现
+- [ ] **gate：lab timing vs bus spec** — rules 对照 session metrics（类似现有 waveform RMSE / correlation）；失败进 `gate_report.json`
+- [ ] **与示波器分工写清（文档）** — 交互排障 / decode 用人眼+示波器 UI；benchgate 只消费 SCPI 证据做回归签核；CLI_REFERENCE / MINIMUM_SCOPE 补边界（明确排除 nodebus、flash、soft-I²C 状态机）
+- [ ] **DS1104(+LA) 实机路径** — `instruments.yaml` / `lab.yaml` 示例；优先 SCPI 拉数字波形或测量；示波器自带 I²C decode 仅作人工确认，非硬依赖

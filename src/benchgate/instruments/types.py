@@ -26,6 +26,25 @@ class TriggerSlope(str, Enum):
     FALLING = "falling"
 
 
+class PeakMode(str, Enum):
+    AVR = "AVR"
+    MIN = "MIN"
+    MID = "MID"
+    RMS = "RMS"
+
+
+class SparamKind(str, Enum):
+    S11 = "S11"
+    S21 = "S21"
+    SWR = "SWR"
+
+
+class CalStandard(str, Enum):
+    SHORT = "SHORT"
+    OPEN = "OPEN"
+    LOAD = "LOAD"
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     """Uniform retry behaviour for any instrument operation.
@@ -129,6 +148,30 @@ class ScalarSeries:
 
     def __len__(self) -> int:
         return int(self.values.shape[0])
+
+
+@dataclass(frozen=True)
+class Spectrum:
+    """A captured frequency-domain trace (spectrum analyzer, VNA magnitude, ...)."""
+
+    freq_hz: np.ndarray
+    amplitude_dbm: np.ndarray
+    timestamp: datetime
+    trace: str = "current"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __len__(self) -> int:
+        return int(self.freq_hz.shape[0])
+
+
+@dataclass
+class ScanConfig:
+    center_mhz: float | None = None
+    span_mhz: float | None = None
+    start_mhz: float | None = None
+    stop_mhz: float | None = None
+    reference_dbm: float | None = None
+    attenuation: int | None = None
 
 
 @dataclass

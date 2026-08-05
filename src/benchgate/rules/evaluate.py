@@ -15,6 +15,7 @@ class RuleContext:
     monte_carlo: dict[str, Any] | None = None
     operating_point: dict[str, Any] | None = None
     gate_report: dict[str, Any] | None = None
+    block_sweep_report: dict[str, Any] | None = None
 
 
 @dataclass
@@ -88,6 +89,22 @@ def _find_check_value(sim_report: dict | None, signal: str, metric: str) -> floa
             if isinstance(val, Real):
                 return float(val)
     return None
+
+
+def _sweep_metric_values(ctx: RuleContext, metric: str) -> list[float]:
+    report = ctx.block_sweep_report
+    if not report:
+        return []
+    points = report.get("points") or []
+    vals: list[float] = []
+    for pt in points:
+        m = pt.get("metrics") or {}
+        val = m.get(metric)
+        if val is None and metric == report.get("metric"):
+            val = pt.get("metric")
+        if isinstance(val, Real):
+            vals.append(float(val))
+    return vals
 
 
 def _evaluate_limit(rule: RuleDef, ctx: RuleContext) -> tuple[bool, str]:
@@ -170,6 +187,36 @@ def _evaluate_limit(rule: RuleDef, ctx: RuleContext) -> tuple[bool, str]:
         if worst < min_corr:
             return False, f"correlation {worst:g} below min {min_corr:g}"
         return True, f"correlation {worst:g} >= {min_corr:g}"
+
+    if ltype == "sweep_metric_max_lte":
+        metric = str(limit.get("metric") or limit.get("name") or "")
+        if not metric:
+            return False, "sweep_metric_max_lte requires metric"
+        vals = _sweep_metric_values(ctx, metric)
+        if not vals:
+            return False, f"metric {metric!r} not found in block_sweep_report"
+        worst = max(vals)
+        hi = limit.get("max")
+        if hi is None:
+            return False, "sweep_metric_max_lte requires max"
+        if worst > float(hi):
+            return False, f"sweep max {worst:g} exceeds {float(hi):g}"
+        return True, f"sweep max {worst:g} <= {float(hi):g}"
+
+    if ltype == "sweep_metric_min_gte":
+        metric = str(limit.get("metric") or limit.get("name") or "")
+        if not metric:
+            return False, "sweep_metric_min_gte requires metric"
+        vals = _sweep_metric_values(ctx, metric)
+        if not vals:
+            return False, f"metric {metric!r} not found in block_sweep_report"
+        worst = min(vals)
+        lo = limit.get("min")
+        if lo is None:
+            return False, "sweep_metric_min_gte requires min"
+        if worst < float(lo):
+            return False, f"sweep min {worst:g} below {float(lo):g}"
+        return True, f"sweep min {worst:g} >= {float(lo):g}"
 
     return False, f"unknown limit type {ltype!r}"
 

@@ -30,26 +30,23 @@ class RulePack:
     meta: dict[str, Any] = field(default_factory=dict)
 
 
-def _bundled_rules_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / "docs" / "examples" / "rules"
-
-
 def default_rule_pack_paths(*, home: Path, design: Path) -> list[Path]:
+    """Rule packs to apply when the caller named none.
+
+    Only packs the user actually owns count: the site-wide ones under
+    ``$BENCHGATE_HOME/config/rules`` and the design's own ``models/rules``.
+
+    The packs under ``docs/examples/rules`` are documentation, not defaults. They
+    used to be loaded as a fallback, which made every project without its own
+    pack inherit the charge-pump example's checks and fail sign-off on nets it
+    does not have -- and, worse, a project *with* its own pack still inherited
+    ``corp-derating-2024``, whose ``stress_derating_pass`` hard-fails unless the
+    project happens to run stress sweeps.
+    """
     paths: list[Path] = []
-    corp = home / "config" / "rules" / "corp-derating.yaml"
-    if corp.is_file():
-        paths.append(corp)
-    else:
-        bundled = _bundled_rules_dir() / "corp-derating.yaml"
-        if bundled.is_file():
-            paths.append(bundled)
-    proj_dir = design / "models" / "rules"
-    if proj_dir.is_dir():
-        paths.extend(sorted(proj_dir.glob("*.yaml")))
-    elif (design / "models" / "blocks.yaml").is_file():
-        bundled_proj = _bundled_rules_dir() / "project-spec.yaml"
-        if bundled_proj.is_file():
-            paths.append(bundled_proj)
+    for directory in (home / "config" / "rules", design / "models" / "rules"):
+        if directory.is_dir():
+            paths.extend(sorted(directory.glob("*.yaml")))
     return paths
 
 

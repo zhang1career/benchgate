@@ -194,6 +194,38 @@ def test_gate_spec_status_from_metrics(tmp_path):
     assert failing.summary["spec_failures"] == 1
 
 
+def test_build_gate_report_loads_operating_point_from_blocks_yaml(tmp_path):
+    from benchgate.gate.report import build_gate_report
+    from benchgate.schemas import ModelProvenance, ModelSource
+
+    blocks_yaml = tmp_path / "blocks.yaml"
+    blocks_yaml.write_text(
+        "operating_point:\n  vsupply_v: 11.0\n  temp_c: 25\nblocks: []\n",
+        encoding="utf-8",
+    )
+    manifest = MappingManifest(
+        entries=[
+            ComponentMapping(
+                kicad_key="Sim:X::BLK",
+                reference="X1",
+                spice_kind=SpiceModelKind.SUBCKT,
+                sim_name="BLK",
+                provenance=ModelProvenance(
+                    source=ModelSource.LTSPICE,
+                    valid_range={"vsupply_v": [2.7, 12.6], "temp_c": [-40, 125]},
+                ),
+            )
+        ]
+    )
+    report = build_gate_report(
+        manifest,
+        captured_dir=tmp_path / "captured",
+        blocks_yaml=blocks_yaml,
+    )
+    assert report.summary["range_warnings"] == 0
+    assert report.entries[0].range_warnings == []
+
+
 def test_build_gate_report(tmp_path):
     store = LabDataStore(tmp_path / "captured")
     meta = store.write_session(component_ref="C1", waveforms={"scope_ch1": _sine_waveform()})

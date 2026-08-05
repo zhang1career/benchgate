@@ -1,6 +1,6 @@
 # benchgate CLI 参考
 
-权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（31 个）及一行说明。
+权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（32 个）及一行说明。
 
 | 形式 | 文件 | 用途 |
 |------|------|------|
@@ -24,7 +24,8 @@
 | `benchgate sim run` | `sim_run` | `kicad-cli` 导出网表 → preflight → `ngspice -b`；checks + stress；导出 `sim_waveform*.csv` |
 | `benchgate sim preflight` | — | 导出网表并做仿真前检查，**不**跑 ngspice |
 | `benchgate sim stress-sweep` | `sim_stress_sweep` | 按 profile `stress_sweep` 轴扫描，汇总最坏应力 |
-| `benchgate sim sweep` | `sim_sweep` | 参数/元件值网格扫描，每点采集一个 metric |
+| `benchgate sim sweep` | `sim_sweep` | 参数/元件值网格扫描；`--metric` 可重复，每点一次仿真取多个 metric |
+| `benchgate sim block-sweep` | `sim_block_sweep` | 扫描独立 block testbench `.cir`，**不需要** KiCad 工程或 `sim_profiles.yaml` |
 | `benchgate sim diagnose` | `sim_diagnose` | 汇总 preflight、`sim_report`、`ngspice.log`（仅仿真侧） |
 | `benchgate sim tolerance` | `sim_tolerance` | `blocks.yaml` 容差 MC：`lhs` / `adaptive` / `sequential` / `auto`；支持 `--jobs`、粗→细 |
 | `benchgate sim cosim` | `sim_cosim` | ngspice + 固件 `control.c` 闭环 cosim |

@@ -274,6 +274,7 @@ def watch_once(
             if inferred_op and not op:
                 op = inferred_op
         paths = benchgate_paths(design_dir, manifest=manifest_path, reports=reports_dir)
+        blocks_path = blocks_yaml or (design_dir / "models" / "blocks.yaml")
         gate = write_gate_report(
             manifest_path,
             gate_path,
@@ -287,6 +288,8 @@ def watch_once(
             rule_pack_paths=default_rule_pack_paths(home=paths.home, design=design_dir),
             sim_profile_path=sim_profile_path,
             profile=profile,
+            design_dir=design_dir,
+            blocks_yaml=blocks_path if blocks_path.is_file() else None,
         )
         result["gate"] = gate.to_dict()
         result["operating_point"] = op

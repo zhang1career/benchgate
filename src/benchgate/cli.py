@@ -165,7 +165,7 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
         "manifest_path": str(p.manifest),
         "output_dir": str(out_dir),
         "profile": args.profile,
-        "metric": args.metric,
+        "metrics": list(args.metric),
         "params": params,
         "sets": sets,
     }
@@ -176,6 +176,38 @@ def cmd_sim_sweep(args: argparse.Namespace) -> int:
     result = dispatch("sim_sweep", call_args)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
+
+
+def cmd_sim_block_sweep(args: argparse.Namespace) -> int:
+    from benchgate.sim.sweep import parse_axis
+
+    p = _paths(args)
+    out_dir = resolve_project_path(p.design, args.out, p.reports / "block_sweep")
+    params: dict[str, list[str]] = {}
+    sets: dict[str, list[str]] = {}
+    for spec in args.param or []:
+        name, values = parse_axis(spec)
+        params[name] = values
+    for spec in args.set or []:
+        name, values = parse_axis(spec)
+        sets[name] = values
+    call_args: dict = {
+        "design_dir": str(p.design),
+        "netlist": args.netlist,
+        "output_dir": str(out_dir),
+        "metrics": list(args.metric),
+        "params": params,
+        "sets": sets,
+    }
+    if args.pass_gte is not None:
+        call_args["pass_gte"] = args.pass_gte
+    if args.pass_lte is not None:
+        call_args["pass_lte"] = args.pass_lte
+    result = dispatch("sim_block_sweep", call_args)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    points = (result.get("report") or {}).get("points") or []
+    failed = [pt for pt in points if pt.get("passed") is False]
+    return 1 if failed else 0
 
 
 def cmd_sim_diagnose(args: argparse.Namespace) -> int:
@@ -354,7 +386,7 @@ def cmd_kicad_sim_fields(args: argparse.Namespace) -> int:
 
 def _lab_overrides(args: argparse.Namespace) -> dict:
     out = {}
-    for role in ("scope", "dmm", "awg"):
+    for role in ("scope", "dmm", "awg", "sa", "rfgen", "vna"):
         val = getattr(args, role, None)
         if val:
             out[role] = val
@@ -513,6 +545,115 @@ def cmd_lab_query_waveform(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_tags(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [t.strip() for t in value.split(",") if t.strip()]
+
+
+def _bool_arg(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return value.lower() == "true"
+
+
+def cmd_lab_sa_sweep(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    for key in ("center_mhz", "span_mhz", "start_mhz", "stop_mhz", "reference_dbm", "attenuation"):
+        val = getattr(args, key, None)
+        if val is not None:
+            params[key] = val
+    if args.component_ref:
+        params["component_ref"] = args.component_ref
+    tags = _parse_tags(args.tags)
+    if tags:
+        params["tags"] = tags
+    result = dispatch("lab_sa_sweep", params)
+    if args.out:
+        from benchgate.lab.store import LabDataStore, dump_spectrum_csv
+
+        p = benchgate_paths(args.design)
+        spec = LabDataStore(p.captured).load_spectrum(result["session_id"], "sa_trace")
+        Path(args.out).write_text(dump_spectrum_csv(spec), encoding="utf-8")
+        result["csv"] = args.out
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_sa_peak(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design, "mode": args.mode}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    result = dispatch("lab_sa_peak", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_sa_floor(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    result = dispatch("lab_sa_floor", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_sa_gen(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    enabled = _bool_arg(args.enabled)
+    if enabled is not None:
+        params["enabled"] = enabled
+    if args.frequency_mhz is not None:
+        params["frequency_mhz"] = args.frequency_mhz
+    if args.power_dbm is not None:
+        params["power_dbm"] = args.power_dbm
+    if args.attenuator is not None:
+        params["attenuator"] = args.attenuator
+    result = dispatch("lab_sa_gen", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_sa_cal(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "param": args.param,
+        "standard": args.standard,
+        "enabled": _bool_arg(args.enabled),
+    }
+    if args.instrument:
+        params["instrument"] = args.instrument
+    result = dispatch("lab_sa_cal", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_sa_sparam(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design, "param": args.param}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    if args.component_ref:
+        params["component_ref"] = args.component_ref
+    tags = _parse_tags(args.tags)
+    if tags:
+        params["tags"] = tags
+    result = dispatch("lab_sa_sparam", params)
+    if args.out:
+        from benchgate.lab.store import LabDataStore, dump_spectrum_csv
+
+        p = benchgate_paths(args.design)
+        channel = f"sa_{args.param.lower()}"
+        spec = LabDataStore(p.captured).load_spectrum(result["session_id"], channel)
+        Path(args.out).write_text(dump_spectrum_csv(spec), encoding="utf-8")
+        result["csv"] = args.out
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_model_build(args: argparse.Namespace) -> int:
     params: dict = {
         "design_dir": args.design,
@@ -575,6 +716,15 @@ def cmd_agent_call(args: argparse.Namespace) -> int:
     params = json.loads(args.params) if args.params else {}
     result = dispatch(args.tool, params)
     print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from benchgate.scaffold.init_design import init_design
+
+    p = _paths(args)
+    result = init_design(p.design, force=args.force)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -647,12 +797,41 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--manifest", default=None, help="Override manifest path")
     sw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_sweep)")
     sw.add_argument("--profile", default="default")
-    sw.add_argument("--metric", required=True, help="signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u'")
+    sw.add_argument(
+        "--metric",
+        action="append",
+        required=True,
+        help="[name=]signal[:metric[:window_after]], e.g. 'v(n_hdr):min:250u' (repeatable; "
+        "the first one decides pass/fail)",
+    )
     sw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
     sw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
     sw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
     sw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
     sw.set_defaults(func=cmd_sim_sweep)
+    bsw = sim_sub.add_parser(
+        "block-sweep",
+        help="Sweep a standalone block testbench .cir (no KiCad project, no sim profile)",
+    )
+    _add_design_arg(bsw)
+    bsw.add_argument(
+        "--netlist",
+        required=True,
+        help="Testbench .cir, absolute or relative to <design> (e.g. models/blocks/input_buffer_tb.cir)",
+    )
+    bsw.add_argument("--out", default=None, help="Output directory (default: <design>/reports/block_sweep)")
+    bsw.add_argument(
+        "--metric",
+        action="append",
+        required=True,
+        help="[name=]signal[:metric[:window_after]], e.g. 'bw=v(com):bw_3db' (repeatable; "
+        "the first one decides pass/fail)",
+    )
+    bsw.add_argument("--param", action="append", default=[], help="Sweep a .param: NAME=v1,v2,... (repeatable)")
+    bsw.add_argument("--set", action="append", default=[], help="Sweep an element value: REF=v1,v2,... (repeatable)")
+    bsw.add_argument("--pass-gte", dest="pass_gte", type=float, default=None, help="Mark metric>=X as pass")
+    bsw.add_argument("--pass-lte", dest="pass_lte", type=float, default=None, help="Mark metric<=X as pass")
+    bsw.set_defaults(func=cmd_sim_block_sweep)
     sc = sim_sub.add_parser("cosim", help="Closed-loop cosim with firmware control.c")
     _add_design_arg(sc)
     sc.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
@@ -901,6 +1080,60 @@ def main(argv: list[str] | None = None) -> int:
     lqw.add_argument("--out", default=None, help="Export to CSV")
     lqw.set_defaults(func=cmd_lab_query_waveform)
 
+    lsa = lab_sub.add_parser("sa", help="Spectrum analyzer / RF source / VNA (SA8, tinySA, …)")
+    sa_sub = lsa.add_subparsers(dest="lab_sa_cmd", required=True)
+
+    lsas = sa_sub.add_parser("sweep", help="Capture spectrum sweep (role: sa)")
+    _add_design_arg(lsas)
+    lsas.add_argument("--instrument", default=None)
+    lsas.add_argument("--center-mhz", dest="center_mhz", type=float, default=None)
+    lsas.add_argument("--span-mhz", dest="span_mhz", type=float, default=None)
+    lsas.add_argument("--start-mhz", dest="start_mhz", type=float, default=None)
+    lsas.add_argument("--stop-mhz", dest="stop_mhz", type=float, default=None)
+    lsas.add_argument("--reference-dbm", dest="reference_dbm", type=float, default=None)
+    lsas.add_argument("--attenuation", type=int, default=None)
+    lsas.add_argument("--component-ref", dest="component_ref", default=None)
+    lsas.add_argument("--tags", default=None)
+    lsas.add_argument("--out", default=None, help="Export captured spectrum to CSV")
+    lsas.set_defaults(func=cmd_lab_sa_sweep)
+
+    lsap = sa_sub.add_parser("peak", help="Read on-screen peak (role: sa)")
+    _add_design_arg(lsap)
+    lsap.add_argument("--instrument", default=None)
+    lsap.add_argument("--mode", default="AVR", choices=["AVR", "MIN", "MID", "RMS"])
+    lsap.set_defaults(func=cmd_lab_sa_peak)
+
+    lsaf = sa_sub.add_parser("floor", help="Read on-screen noise floor (role: sa)")
+    _add_design_arg(lsaf)
+    lsaf.add_argument("--instrument", default=None)
+    lsaf.set_defaults(func=cmd_lab_sa_floor)
+
+    lsag = sa_sub.add_parser("gen", help="Configure tracking generator (role: rfgen)")
+    _add_design_arg(lsag)
+    lsag.add_argument("--instrument", default=None)
+    lsag.add_argument("--enabled", default=None, choices=["true", "false"])
+    lsag.add_argument("--frequency-mhz", dest="frequency_mhz", type=float, default=None)
+    lsag.add_argument("--power-dbm", dest="power_dbm", type=int, default=None)
+    lsag.add_argument("--attenuator", type=int, default=None)
+    lsag.set_defaults(func=cmd_lab_sa_gen)
+
+    lsac = sa_sub.add_parser("cal", help="S-parameter calibration (role: vna)")
+    _add_design_arg(lsac)
+    lsac.add_argument("--instrument", default=None)
+    lsac.add_argument("--param", required=True, choices=["S11", "S21", "SWR"])
+    lsac.add_argument("--standard", default="OPEN", choices=["SHORT", "OPEN", "LOAD"])
+    lsac.add_argument("--enabled", default="true", choices=["true", "false"])
+    lsac.set_defaults(func=cmd_lab_sa_cal)
+
+    lsasp = sa_sub.add_parser("sparam", help="Capture S-parameter history trace (role: vna)")
+    _add_design_arg(lsasp)
+    lsasp.add_argument("--instrument", default=None)
+    lsasp.add_argument("--param", default="S21", choices=["S11", "S21", "SWR"])
+    lsasp.add_argument("--component-ref", dest="component_ref", default=None)
+    lsasp.add_argument("--tags", default=None)
+    lsasp.add_argument("--out", default=None, help="Export captured trace to CSV")
+    lsasp.set_defaults(func=cmd_lab_sa_sparam)
+
     p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
     model_sub = p_model.add_subparsers(dest="model_cmd", required=True)
     mb = model_sub.add_parser("build", help="Build an ngspice model from a provider source and register it")
@@ -958,6 +1191,10 @@ def main(argv: list[str] | None = None) -> int:
     ac.add_argument("tool")
     ac.add_argument("--params", default="{}", help="JSON object")
     ac.set_defaults(func=cmd_agent_call)
+
+    p_init = sub.add_parser("init", help="Scaffold models/blocks.yaml, rules, lab.yaml under a design")
+    p_init.add_argument("--force", action="store_true", help="Overwrite existing scaffold files")
+    p_init.set_defaults(func=cmd_init)
 
     p_mcp = sub.add_parser("mcp", help="Model Context Protocol server (stdio)")
     mcp_sub = p_mcp.add_subparsers(dest="mcp_cmd", required=True)

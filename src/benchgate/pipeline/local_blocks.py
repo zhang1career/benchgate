@@ -45,7 +45,16 @@ def _load_metrics(block: dict[str, Any], models_dir: Path) -> dict[str, float]:
     metrics: dict[str, float] = {}
     inline = block.get("metrics")
     if isinstance(inline, dict):
-        metrics.update({k: float(v) for k, v in inline.items()})
+        for key, val in inline.items():
+            if isinstance(val, (int, float)):
+                metrics[key] = float(val)
+            elif isinstance(val, list):
+                continue
+            else:
+                raise ValueError(
+                    f"blocks.yaml metrics[{key!r}] must be numeric; "
+                    f"store sweep tables in a separate *_sweeps.json sidecar"
+                )
     metrics_file = block.get("metrics_file")
     if metrics_file:
         path = models_dir / metrics_file
@@ -57,7 +66,16 @@ def _load_metrics(block: dict[str, Any], models_dir: Path) -> dict[str, float]:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError(f"metrics_file must be a JSON object: {path}")
-            metrics.update({k: float(v) for k, v in data.items()})
+            for key, val in data.items():
+                if isinstance(val, (int, float)):
+                    metrics[key] = float(val)
+                elif isinstance(val, list):
+                    continue
+                else:
+                    raise TypeError(
+                        f"metrics_file {path}: key {key!r} is {type(val).__name__}, "
+                        "expected number (use a *_sweeps.json sidecar for tables)"
+                    )
     return metrics
 
 
@@ -130,6 +148,25 @@ def sync_local_blocks(
     }
 
 
+def _iter_testbench_runs(block: dict[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Return (relative_path, measures) pairs from a block definition."""
+    runs: list[tuple[str, list[dict[str, Any]]]] = []
+    multi = block.get("testbenches")
+    if isinstance(multi, list):
+        for entry in multi:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path") or entry.get("testbench")
+            measures = entry.get("measures")
+            if path and measures:
+                runs.append((str(path), measures))
+    path = block.get("testbench")
+    measures = block.get("measures")
+    if path and measures:
+        runs.append((str(path), measures))
+    return runs
+
+
 def _sync_one_block(
     block: dict[str, Any],
     *,
@@ -152,6 +189,24 @@ def _sync_one_block(
     existing = entry.provenance
     valid_range = _merge_provenance_dict(block.get("valid_range"), existing.valid_range if existing else None)
     metrics = _load_metrics(block, models_dir)
+
+    tb_runs = _iter_testbench_runs(block)
+    if tb_runs:
+        from benchgate.sim.block_measures import run_block_measures, write_metrics_file
+
+        block_work = workdir / kicad_key.replace(":", "_")
+        for idx, (testbench_rel, measures) in enumerate(tb_runs):
+            tb_path = (models_dir / testbench_rel).resolve()
+            measured = run_block_measures(
+                testbench=tb_path,
+                measures=measures,
+                output_dir=block_work / f"measures_{idx:02d}",
+            )
+            metrics.update(measured)
+        metrics_out = block.get("metrics_file")
+        if metrics_out:
+            write_metrics_file((models_dir / metrics_out).resolve(), metrics)
+
     if not metrics and existing and existing.metrics:
         metrics = dict(existing.metrics)
 

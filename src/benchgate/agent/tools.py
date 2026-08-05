@@ -5,7 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 
+# Spelled out rather than imported from benchgate.sim.analysis, which would pull numpy
+# into every MCP handshake. test_agent_tools keeps the two in step.
+_METRIC_NAMES = (
+    "min, max, avg, rms, pp, final, "
+    "settling_time, settling_time_01pct, settling_time_001pct, "
+    "overshoot_pct, slew_rate, integral, charge_nc, "
+    "bw_3db, peaking_db, gain_db_max, gain_db_first"
+)
+
 TOOLS: dict[str, dict[str, Any]] = {
+    "benchgate_version": {
+        "description": (
+            "Return benchgate version, install path, and registered MCP tool count "
+            "for stale-server detection after local edits"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
     "mapping_sync": {
         "description": "Scan KiCad schematic and update models/manifest.yaml",
         "parameters": {
@@ -140,6 +156,91 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "lab_sa_sweep": {
+        "description": "Capture a spectrum sweep from the bound SA (role: sa; SA8/tinySA/…) and store a session",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string", "description": "Explicit instrument name"},
+                "center_mhz": {"type": "number"},
+                "span_mhz": {"type": "number"},
+                "start_mhz": {"type": "number"},
+                "stop_mhz": {"type": "number"},
+                "reference_dbm": {"type": "number"},
+                "attenuation": {"type": "integer"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_peak": {
+        "description": "Read on-screen peak from the bound SA (role: sa)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "mode": {"type": "string", "enum": ["AVR", "MIN", "MID", "RMS"], "description": "Peak statistic"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_floor": {
+        "description": "Read noise floor from the bound SA (role: sa)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_gen": {
+        "description": "Configure the bound RF/tracking generator (role: rfgen; SA8/tinySA/…)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "enabled": {"type": "boolean"},
+                "frequency_mhz": {"type": "number"},
+                "power_dbm": {"type": "integer"},
+                "attenuator": {"type": "integer", "description": "Digital attenuator 0..63"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_sa_cal": {
+        "description": "Start/stop S-parameter calibration on the bound VNA (role: vna; SA8)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "param": {"type": "string", "enum": ["S11", "S21", "SWR"]},
+                "standard": {"type": "string", "enum": ["SHORT", "OPEN", "LOAD"]},
+                "enabled": {"type": "boolean", "description": "Enable (true) or disable (false) calibration"},
+            },
+            "required": ["design_dir", "param"],
+        },
+    },
+    "lab_sa_sparam": {
+        "description": "Capture an S-parameter history trace from the bound VNA (role: vna; SA8)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "param": {"type": "string", "enum": ["S11", "S21", "SWR"], "description": "Trace label (default S21)"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "lab_query_sessions": {
         "description": "List stored capture sessions filtered by component/time/tags",
         "parameters": {
@@ -229,9 +330,9 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "sim_sweep": {
         "description": (
-            "Run a sim profile over a grid of overrides and collect one metric per point. "
+            "Run a sim profile over a grid of overrides and collect metrics per point. "
             "Axes: params (override .param NAME) and sets (override an element value, e.g. R11). "
-            "Metric spec is 'signal[:metric[:window_after]]' (metric: min/max/avg/rms/pp/final)."
+            "Metric spec is '[name=]signal[:metric[:window_after]]'."
         ),
         "parameters": {
             "type": "object",
@@ -240,13 +341,55 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "manifest_path": {"type": "string"},
                 "output_dir": {"type": "string"},
                 "profile": {"type": "string"},
-                "metric": {"type": "string", "description": "e.g. 'v(n_hdr):min:250u'"},
+                "metric": {"type": "string", "description": "single metric, e.g. 'v(n_hdr):min:250u'"},
+                "metrics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "several metrics off one run per point; the first decides pass/fail. "
+                        f"metric names: {_METRIC_NAMES}"
+                    ),
+                },
                 "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
                 "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
                 "pass_gte": {"type": "number", "description": "Mark point passed if metric >= this"},
                 "pass_lte": {"type": "number", "description": "Mark point passed if metric <= this"},
             },
-            "required": ["design_dir", "profile", "metric"],
+            "required": ["design_dir", "profile"],
+        },
+    },
+    "sim_block_sweep": {
+        "description": (
+            "Sweep a standalone block testbench .cir over a grid of overrides — no KiCad "
+            "project and no sim_profiles.yaml needed. Use this to characterise a block from "
+            "models/blocks/ on its own (and to produce the numbers that go into blocks.yaml "
+            "metrics) before the board has a schematic. The testbench owns its stimulus and "
+            ".control block, so an AC run is just an 'ac dec ...' line in it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "netlist": {
+                    "type": "string",
+                    "description": "Testbench .cir, absolute or relative to design_dir",
+                },
+                "output_dir": {"type": "string"},
+                "metrics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "'[name=]signal[:metric[:window_after]]', e.g. 'bw=v(com):bw_3db'. "
+                        "The first decides pass/fail. All are evaluated off one run per point. "
+                        f"metric names: {_METRIC_NAMES}"
+                    ),
+                },
+                "params": {"type": "object", "description": "{PARAM_NAME: [v1, v2, ...]} overriding .param lines"},
+                "sets": {"type": "object", "description": "{REFDES: [v1, v2, ...]} overriding element values"},
+                "pass_gte": {"type": "number", "description": "Mark point passed if first metric >= this"},
+                "pass_lte": {"type": "number", "description": "Mark point passed if first metric <= this"},
+            },
+            "required": ["design_dir", "netlist", "metrics"],
         },
     },
     "sim_cosim": {
@@ -277,6 +420,11 @@ TOOLS: dict[str, dict[str, Any]] = {
                 },
                 "stress_sweep": {"type": "boolean", "description": "Run profile stress_sweep first"},
                 "profile": {"type": "string", "description": "sim_profiles.yaml block for stress_sweep"},
+                "rules": {
+                    "type": "string",
+                    "enum": ["auto", "none"],
+                    "description": "auto (default) = $BENCHGATE_HOME/config/rules + design models/rules; none = skip rule packs and report spec only",
+                },
             },
             "required": ["design_dir"],
         },
