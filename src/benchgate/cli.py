@@ -22,7 +22,7 @@ CLI_DESCRIPTION = (
 
 DOCS_EPILOG = """\
 documentation (in the benchgate install / source tree):
-  docs/CLI_REFERENCE.md     all leaf commands (31)
+  docs/CLI_REFERENCE.md     all leaf commands (39)
   docs/diagrams/command-tree.puml   CLI mindmap
   docs/examples/blocks.yaml         top-down blocks template
   docs/examples/bench_compare.yaml  bench vs sim probe mapping

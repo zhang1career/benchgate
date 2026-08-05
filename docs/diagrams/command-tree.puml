@@ -12,7 +12,8 @@ left side
 *** sim run\nkicad-cli → ngspice -b\n+ sim_waveform CSV
 *** sim preflight\n网表检查，不跑求解器
 *** sim stress-sweep\n扫描应力轴，最坏情况
-*** sim sweep\n参数网格 + 单指标
+*** sim sweep\n参数网格 + 多 metric
+*** sim block-sweep\n独立 block testbench .cir
 *** sim diagnose\n仿真侧 preflight / report / log
 *** sim tolerance\nblocks 容差 MC（lhs/adaptive/…）
 *** sim cosim\n固件闭环 cosim
@@ -34,10 +35,18 @@ right side
 *** lab query metric\n跨会话指标序列
 *** lab query drift\n指标漂移趋势
 *** lab query waveform\n导出 Session 波形
+*** lab sa sweep\n频谱仪扫频 → Session
+*** lab sa peak\n屏上峰值（dBm）
+*** lab sa floor\n噪声底（ADC）
+*** lab sa gen\n跟踪源控制
+*** lab sa cal\nS 参数校准
+*** lab sa sparam\nS 参数历史曲线
 ** 模型与预算
 *** model build\nprovider → subckt + provenance
 *** model status\nsource / valid_range / spec
 *** spec set\nperformance budget
+** 脚手架
+*** init\nblocks.yaml + rules + lab.yaml
 ** 元工具
 *** kicad sim-fields\n写 Sim.Library/Name/Pins
 *** agent tools\nAgent 工具 JSON schema

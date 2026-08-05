@@ -1,6 +1,6 @@
 # benchgate CLI 参考
 
-权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（32 个）及一行说明。
+权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（39 个）及一行说明。
 
 | 形式 | 文件 | 用途 |
 |------|------|------|
@@ -62,6 +62,12 @@
 | `benchgate lab query metric` | `lab_metric_series` | 跨会话指标时间序列 |
 | `benchgate lab query drift` | `lab_metric_drift` | 指标漂移趋势与统计 |
 | `benchgate lab query waveform` | — | 从 Session 加载/导出波形（CLI only） |
+| `benchgate lab sa sweep` | `lab_sa_sweep` | 频谱仪扫频 → Session；`--out` 导出 CSV |
+| `benchgate lab sa peak` | `lab_sa_peak` | 读屏上峰值（dBm）；`--mode AVR\|MIN\|MID\|RMS` |
+| `benchgate lab sa floor` | `lab_sa_floor` | 读屏上噪声底（ADC） |
+| `benchgate lab sa gen` | `lab_sa_gen` | 跟踪源控制（频率 / 功率 / 衰减） |
+| `benchgate lab sa cal` | `lab_sa_cal` | S 参数校准（OPEN / SHORT / LOAD） |
+| `benchgate lab sa sparam` | `lab_sa_sparam` | 采集 S 参数历史曲线 → Session |
 
 Agent only：`lab_apply_model`（写 `Sim.*` + manifest，无对应 CLI）。
 
@@ -77,21 +83,29 @@ Agent only：`lab_apply_model`（写 `Sim.*` + manifest，无对应 CLI）。
 
 ---
 
+## 脚手架
+
+| 命令 | Agent 工具 | 说明 |
+|------|------------|------|
+| `benchgate init` | — | 在 `--design` 下生成 `models/blocks.yaml`、`models/rules/project-spec.yaml`、`models/lab.yaml`；`--force` 覆盖已有文件 |
+
+---
+
 ## 元工具
 
 | 命令 | Agent 工具 | 说明 |
 |------|------------|------|
 | `benchgate kicad sim-fields` | — | KiCad 10：文本方式写 `Sim.Library` / `Sim.Name` / `Sim.Pins`（CLI only） |
-| `benchgate agent tools` | — | 输出全部 Agent 工具 JSON schema |
+| `benchgate agent tools` | — | 输出全部 Agent 工具 JSON schema（33 个，含 `benchgate_version`） |
 | `benchgate agent call TOOL` | — | `dispatch(TOOL, --params '{}')` 调试入口 |
 | `benchgate mcp serve` | — | stdio MCP，暴露与 `agent call` 相同的 dispatch 工具 |
 
 ---
 
-## 顶栏命令组（13 组）
+## 顶栏命令组（14 组）
 
 ```
-mapping · sim · diagnose · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · mcp
+mapping · sim · diagnose · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · init · mcp
 ```
 
 逐组帮助：`benchgate <group> -h`。

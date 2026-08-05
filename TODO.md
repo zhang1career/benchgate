@@ -2,7 +2,7 @@
 
 项目级待办（Agent / 维护者）。架构与里程碑见 `docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md`、`docs/MINIMUM_SCOPE.md`。
 
-**测试基线**：`pytest`（当前 220 tests）
+**测试基线**：`pytest`（当前 228 tests）
 
 ---
 

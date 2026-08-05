@@ -92,7 +92,7 @@ pip install -e ".[lab,agent,dev]"
 export PATH="/Applications/KiCad/KiCad.app/Contents/MacOS:$PATH"
 ```
 
-`--design` 为设计工程目录。MCP：[docs/examples/cursor-mcp.json](docs/examples/cursor-mcp.json)。
+`--design` 为设计工程目录。首次接入可跑 `benchgate init --design <工程目录>` 生成 `models/blocks.yaml` 等脚手架。MCP：[docs/examples/cursor-mcp.json](docs/examples/cursor-mcp.json)。
 
 ---
 
@@ -140,7 +140,7 @@ benchgate sim diagnose --design $DESIGN
 [command-tree.puml](docs/diagrams/command-tree.puml) · [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) · [command-flow.puml](docs/diagrams/command-flow.puml) · [MINIMUM_SCOPE §8](docs/MINIMUM_SCOPE.md#8-benchgate-自有-agent-工具最小集)
 
 ```
-mapping · sim · diagnose · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · mcp
+mapping · sim · diagnose · kicad · watch · pipeline · blocks · gate · lab · model · spec · agent · init · mcp
 ```
 
 ### 报告对比与日常巡检（命令行即可）
@@ -216,7 +216,7 @@ benchgate blocks validate --design pcb --profile charge_pump
 pytest && ruff check src tests
 ```
 
-**当前不做**：交互仿真 GUI、ERC/DRC、Gerber、改线改布局、**可制造性与批次一致性评估**。
+**当前不做**：交互仿真 GUI、ERC/DRC、Gerber、改线改布局。（可制造性与批次一致性见上文 M1–M4：`blocks validate` + `sim tolerance` → `gate report`。）
 
 ---
 
