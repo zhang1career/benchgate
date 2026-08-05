@@ -395,6 +395,10 @@ def build_gate_report(
     rule_pack_paths: list[Path] | None = None,
     sim_profile_path: Path | None = None,
     profile: str = "default",
+    design_dir: Path | None = None,
+    blocks_yaml: Path | None = None,
+    erc_report_path: Path | None = None,
+    block_sweep_report_path: Path | None = None,
 ) -> GateReport:
     sim_dir = sim_dir or (sim_raw_path.parent if sim_raw_path else None)
     bench_compare_manifest = load_bench_compare_manifest(sim_dir) if sim_dir else None
@@ -423,6 +427,12 @@ def build_gate_report(
             sim_report_data = None
     if operating_point is None and inferred_op:
         operating_point = inferred_op
+    if operating_point is None and blocks_yaml and blocks_yaml.is_file():
+        from benchgate.pipeline.local_blocks import load_blocks_config
+
+        op_from_blocks, _ = load_blocks_config(blocks_yaml)
+        if op_from_blocks:
+            operating_point = op_from_blocks
 
     monte_carlo_data: dict | None = None
     if monte_carlo_path and monte_carlo_path.exists():
@@ -430,6 +440,45 @@ def build_gate_report(
             monte_carlo_data = json.loads(monte_carlo_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             monte_carlo_data = None
+
+    block_sweep_data: dict | None = None
+    if block_sweep_report_path and block_sweep_report_path.exists():
+        try:
+            block_sweep_data = json.loads(block_sweep_report_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            block_sweep_data = None
+    elif sim_dir:
+        sweep_candidate = sim_dir / "block_sweep_report.json"
+        if sweep_candidate.exists():
+            try:
+                block_sweep_data = json.loads(sweep_candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                block_sweep_data = None
+
+    coverage_summary = None
+    if design_dir and blocks_yaml and blocks_yaml.exists():
+        from benchgate.gate.coverage import coverage_report
+
+        try:
+            coverage_summary = coverage_report(
+                design_dir=design_dir,
+                manifest=manifest,
+                blocks_yaml=blocks_yaml,
+            )
+        except (FileNotFoundError, OSError):
+            coverage_summary = None
+
+    erc_summary = None
+    if erc_report_path and erc_report_path.exists():
+        from benchgate.kicad.erc import parse_erc_report
+
+        erc_summary = parse_erc_report(erc_report_path).to_dict()
+    elif design_dir:
+        from benchgate.kicad.erc import find_erc_report, parse_erc_report
+
+        erc_path = find_erc_report(design_dir)
+        if erc_path:
+            erc_summary = parse_erc_report(erc_path).to_dict()
 
     entries: list[GateEntry] = []
     board_comparisons: list[dict[str, Any]] = []
@@ -504,8 +553,17 @@ def build_gate_report(
             monte_carlo=monte_carlo_data,
             operating_point=operating_point,
             gate_report=gate_payload,
+            block_sweep_report=block_sweep_data,
         )
         rules_summary = evaluate_rule_packs(packs, ctx).to_dict()
+
+    coverage_count = (
+        int(coverage_summary["uncovered_count"])
+        if coverage_summary and coverage_summary.get("uncovered_count") is not None
+        else 0
+    )
+    erc_errors = int(erc_summary["errors"]) if erc_summary else 0
+    erc_warnings = int(erc_summary["warnings"]) if erc_summary else 0
 
     return GateReport(
         generated_at=datetime.now(timezone.utc).isoformat(),
@@ -523,6 +581,14 @@ def build_gate_report(
             "stress_sweep_worst": stress_sweep_summary,
             "comparisons": board_comparisons,
             "rules": rules_summary,
+            "coverage": coverage_summary,
+            "coverage_warnings": coverage_count,
+            "erc": erc_summary,
+            "erc_errors": erc_errors,
+            "erc_warnings": erc_warnings,
+            "block_sweep_aggregates": (
+                block_sweep_data.get("aggregates") if block_sweep_data else None
+            ),
         },
     )
 
@@ -541,6 +607,10 @@ def write_gate_report(
     rule_pack_paths: list[Path] | None = None,
     sim_profile_path: Path | None = None,
     profile: str = "default",
+    design_dir: Path | None = None,
+    blocks_yaml: Path | None = None,
+    erc_report_path: Path | None = None,
+    block_sweep_report_path: Path | None = None,
 ) -> GateReport:
     manifest = load_manifest(manifest_path)
     report = build_gate_report(
@@ -555,6 +625,10 @@ def write_gate_report(
         rule_pack_paths=rule_pack_paths,
         sim_profile_path=sim_profile_path,
         profile=profile,
+        design_dir=design_dir,
+        blocks_yaml=blocks_yaml,
+        erc_report_path=erc_report_path,
+        block_sweep_report_path=block_sweep_report_path,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")

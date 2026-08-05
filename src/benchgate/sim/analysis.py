@@ -126,9 +126,112 @@ def _window_slice(time: np.ndarray, window_after: float | None) -> np.ndarray:
 _MINUS_3DB = 20.0 * np.log10(1.0 / np.sqrt(2.0))  # -3.0103 dB
 
 TIME_METRICS = ("min", "max", "avg", "rms", "pp", "final")
+# Transient-only; optional params come from the check dict (settle_pct, settle_to, …).
+TRANSIENT_METRICS = (
+    "settling_time",
+    "settling_time_01pct",
+    "settling_time_001pct",
+    "overshoot_pct",
+    "slew_rate",
+    "integral",
+    "charge_nc",
+)
 # These need the sweep axis and only mean anything on a monotonic AC sweep.
 FREQ_METRICS = ("bw_3db", "peaking_db", "gain_db_max", "gain_db_first")
-METRIC_NAMES = TIME_METRICS + FREQ_METRICS
+METRIC_NAMES = TIME_METRICS + TRANSIENT_METRICS + FREQ_METRICS
+
+_SETTLING_PRESETS: dict[str, float] = {
+    "settling_time_01pct": 0.001,
+    "settling_time_001pct": 0.0001,
+}
+
+
+def _series_values(values: np.ndarray) -> np.ndarray:
+    if np.iscomplexobj(values):
+        return np.abs(values)
+    return values
+
+
+def _settling_time(
+    values: np.ndarray,
+    axis: np.ndarray,
+    *,
+    settle_pct: float = 0.001,
+    settle_to: str | float = "final",
+) -> float:
+    """Time from the window start until the signal enters and stays within ±pct of target."""
+    if values.size < 2 or axis.size != values.size:
+        return float("nan")
+    y = _series_values(values)
+    t = axis.astype(float)
+    tail = y[-max(1, len(y) // 10) :]
+    if isinstance(settle_to, (int, float)):
+        target = float(settle_to)
+    else:
+        target = float(np.mean(tail))
+    span = max(abs(float(y[-1]) - float(y[0])), abs(target - float(y[0])), 1e-12)
+    tol = float(settle_pct) * span
+    for idx in range(len(y)):
+        if np.all(np.abs(y[idx:] - target) <= tol):
+            return float(t[idx] - t[0])
+    return float("nan")
+
+
+def _overshoot_pct(values: np.ndarray, *, settle_to: str | float = "final") -> float:
+    if values.size < 2:
+        return float("nan")
+    y = _series_values(values)
+    if isinstance(settle_to, (int, float)):
+        final = float(settle_to)
+    else:
+        final = float(np.mean(y[-max(1, len(y) // 10) :]))
+    initial = float(y[0])
+    step = final - initial
+    if abs(step) < 1e-15:
+        return 0.0
+    if step > 0:
+        peak = float(np.max(y))
+        return max(0.0, (peak - final) / abs(step) * 100.0)
+    trough = float(np.min(y))
+    return max(0.0, (final - trough) / abs(step) * 100.0)
+
+
+def _slew_rate(values: np.ndarray, axis: np.ndarray) -> float:
+    if values.size < 2 or axis.size != values.size:
+        return float("nan")
+    y = _series_values(values)
+    dt = np.diff(axis.astype(float))
+    if not np.any(dt > 0):
+        return float("nan")
+    dv = np.diff(y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rates = np.abs(dv / dt)
+    return float(np.nanmax(rates))
+
+
+def _integral(values: np.ndarray, axis: np.ndarray) -> float:
+    if values.size < 2 or axis.size != values.size:
+        return float("nan")
+    y = _series_values(values)
+    # numpy 2.0 renamed trapz -> trapezoid; keep both for 1.x installs.
+    trapz = getattr(np, "trapezoid", np.trapz)
+    return float(trapz(y, axis.astype(float)))
+
+
+def _resolve_settle_pct(metric: str, params: dict | None) -> float:
+    if params and "settle_pct" in params:
+        return float(params["settle_pct"])
+    if metric in _SETTLING_PRESETS:
+        return _SETTLING_PRESETS[metric]
+    return 0.001
+
+
+def _resolve_settle_to(params: dict | None) -> str | float:
+    if not params:
+        return "final"
+    if "settle_to" in params:
+        return params["settle_to"]
+    return "final"
 
 
 def _interp_crossing(
@@ -161,11 +264,15 @@ def _response_db(values: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def _compute_metric(
-    values: np.ndarray, metric: str, axis: np.ndarray | None = None
+    values: np.ndarray,
+    metric: str,
+    axis: np.ndarray | None = None,
+    params: dict | None = None,
 ) -> float:
     if values.size == 0:
         return float("nan")
     metric = metric.lower()
+    params = params or {}
 
     if metric in FREQ_METRICS:
         db, ref = _response_db(values)
@@ -183,6 +290,22 @@ def _compute_metric(
             # never falls 3 dB anywhere in the swept range
             return float("inf")
         return _interp_crossing(axis, db, int(below[0]), _MINUS_3DB)
+
+    if metric in TRANSIENT_METRICS:
+        if axis is None or axis.size != values.size:
+            return float("nan")
+        settle_to = _resolve_settle_to(params)
+        if metric.startswith("settling_time"):
+            pct = _resolve_settle_pct(metric, params)
+            return _settling_time(values, axis, settle_pct=pct, settle_to=settle_to)
+        if metric == "overshoot_pct":
+            return _overshoot_pct(values, settle_to=settle_to)
+        if metric == "slew_rate":
+            return _slew_rate(values, axis)
+        if metric == "integral":
+            return _integral(values, axis)
+        if metric == "charge_nc":
+            return _integral(values, axis) * 1e9
 
     # Complex data reaching a time-domain metric means an AC raw file; magnitude
     # is the only defensible reading.
@@ -311,7 +434,7 @@ def evaluate_checks(
             continue
 
         mask = _window_slice(time, check.get("window_after"))
-        value = _compute_metric(series[mask], metric, axis=time[mask])
+        value = _compute_metric(series[mask], metric, axis=time[mask], params=check)
         passed, message = _evaluate_bounds(value, check)
         results.append(
             CheckResult(

@@ -48,8 +48,15 @@
 - [x] **参数化 `.subckt` 提取** — pin 后的默认参数从前被当 pin 计入 manifest `sim_pins`
 - [x] **rule pack 默认回退** — 从前无 `models/rules/` 时静默加载 `docs/examples/rules`（含 `corp-derating-2024`，无 stress sweep 即硬失败）；默认只取 `$BENCHGATE_HOME/config/rules` + 设计自己的 `models/rules`，并加 `gate report --rules none`
 
-- [ ] **block metrics 自动派生** — `blocks.yaml` 的 `metrics` 目前仍靠人工填 `*.metrics.json`，即 spec 对照的是手抄的数。让 block 声明 testbench + measure，`pipeline sync` 直接跑出 metrics（`sim block-sweep` 已提供执行层，缺 blocks.yaml 侧的声明与串联）
-- [ ] **瞬态多点 measure** — `block-sweep` 每点只出标量；settling / charge 这类需要每点多条 `meas` 的研究仍要外部脚本（见 tars-io-buffer `sim/run_sims.py`）
+- [x] **瞬态 metric 原语** — `settling_time*` / `overshoot_pct` / `slew_rate` / `integral` / `charge_nc`；checks 与 block-sweep 可用
+- [x] **block measures + pipeline sync** — `blocks.yaml` 的 `testbench` + `measures` → `run_block_measures` → 写 `metrics_file`
+- [x] **sweep 聚合 + rule** — `block_sweep_report.json` 含 `aggregates`；rules `sweep_metric_max_lte` / `sweep_metric_min_gte`
+- [x] **MCP 版本探测** — Agent 工具 `benchgate_version`（version / tool_count / tools）
+- [x] **gate 覆盖率 + ERC** — `coverage_warnings` + 自动读 `*.erc.rpt`
+- [x] **`benchgate init`** — 脚手架 `models/blocks.yaml`、`models/rules/project-spec.yaml`、`models/lab.yaml`
+
+- [ ] **block metrics 自动派生** — 瞬态 study（kickback/settling/crosstalk）仍需独立 tran testbench；`run_sims.py` 待迁入
+- [ ] **瞬态多点 measure** — 单次 testbench 已支持多 alias；复杂 study 仍要外部脚本或多 testbench
 
 ---
 

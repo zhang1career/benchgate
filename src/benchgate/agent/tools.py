@@ -8,10 +8,20 @@ from typing import Any
 # Spelled out rather than imported from benchgate.sim.analysis, which would pull numpy
 # into every MCP handshake. test_agent_tools keeps the two in step.
 _METRIC_NAMES = (
-    "min, max, avg, rms, pp, final, bw_3db, peaking_db, gain_db_max, gain_db_first"
+    "min, max, avg, rms, pp, final, "
+    "settling_time, settling_time_01pct, settling_time_001pct, "
+    "overshoot_pct, slew_rate, integral, charge_nc, "
+    "bw_3db, peaking_db, gain_db_max, gain_db_first"
 )
 
 TOOLS: dict[str, dict[str, Any]] = {
+    "benchgate_version": {
+        "description": (
+            "Return benchgate version, install path, and registered MCP tool count "
+            "for stale-server detection after local edits"
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
     "mapping_sync": {
         "description": "Scan KiCad schematic and update models/manifest.yaml",
         "parameters": {

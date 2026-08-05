@@ -64,6 +64,18 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
     if name not in TOOLS:
         raise KeyError(f"Unknown tool: {name}")
 
+    if name == "benchgate_version":
+        import benchgate
+
+        from benchgate.agent.tools import TOOLS as _TOOLS
+
+        return {
+            "version": benchgate.__version__,
+            "install_path": str(Path(benchgate.__file__).resolve().parent),
+            "tool_count": len(_TOOLS),
+            "tools": sorted(_TOOLS.keys()),
+        }
+
     if name == "mapping_sync":
         p = _paths_for_design(args["design_dir"], args)
         manifest = sync_project(
@@ -745,6 +757,8 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             rule_pack_paths=rule_pack_paths,
             sim_profile_path=p.sim_profile,
             profile=profile,
+            design_dir=p.design,
+            blocks_yaml=p.blocks_yaml,
         )
         return report.to_dict()
 

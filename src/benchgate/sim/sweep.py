@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 from benchgate.kicad.cli_export import export_spice_netlist
 from benchgate.kicad.project import KiCadProject
 from benchgate.sim.analysis import (
@@ -250,7 +252,11 @@ def _axes(params: dict[str, list[str]], sets: dict[str, list[str]]) -> list[tupl
 
 def _write_report(report: SweepReport, output_dir: Path, filename: str) -> SweepReport:
     report_path = output_dir / filename
-    report_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    payload = report.to_dict()
+    aggregates = aggregate_sweep_metrics(payload)
+    if aggregates:
+        payload["aggregates"] = aggregates
+    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     report.report_path = str(report_path)
     return report
 
@@ -348,3 +354,27 @@ def run_block_sweep(
         metrics=list(specs),
     )
     return _write_report(report, output_dir, "block_sweep_report.json")
+
+
+def aggregate_sweep_metrics(report: SweepReport | dict) -> dict[str, float]:
+    """Collapse a sweep report to worst-case scalars suitable for gate spec."""
+    data = report if isinstance(report, dict) else report.to_dict()
+    metrics = list(data.get("metrics") or [])
+    if not metrics and data.get("metric"):
+        metrics = [data["metric"]]
+    points = data.get("points") or []
+    out: dict[str, float] = {}
+    for name in metrics:
+        vals: list[float] = []
+        for pt in points:
+            m = pt.get("metrics") or {}
+            val = m.get(name)
+            if val is None and name == data.get("metric"):
+                val = pt.get("metric")
+            if isinstance(val, (int, float)) and not np.isnan(val):
+                vals.append(float(val))
+        if not vals:
+            continue
+        out[f"{name}_max"] = max(vals)
+        out[f"{name}_min"] = min(vals)
+    return out

@@ -719,6 +719,15 @@ def cmd_agent_call(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    from benchgate.scaffold.init_design import init_design
+
+    p = _paths(args)
+    result = init_design(p.design, force=args.force)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_mcp_serve(_: argparse.Namespace) -> int:
     from benchgate.mcp_server import main as mcp_main
 
@@ -1182,6 +1191,10 @@ def main(argv: list[str] | None = None) -> int:
     ac.add_argument("tool")
     ac.add_argument("--params", default="{}", help="JSON object")
     ac.set_defaults(func=cmd_agent_call)
+
+    p_init = sub.add_parser("init", help="Scaffold models/blocks.yaml, rules, lab.yaml under a design")
+    p_init.add_argument("--force", action="store_true", help="Overwrite existing scaffold files")
+    p_init.set_defaults(func=cmd_init)
 
     p_mcp = sub.add_parser("mcp", help="Model Context Protocol server (stdio)")
     mcp_sub = p_mcp.add_subparsers(dest="mcp_cmd", required=True)
