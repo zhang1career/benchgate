@@ -137,7 +137,13 @@ TRANSIENT_METRICS = (
     "charge_nc",
 )
 # These need the sweep axis and only mean anything on a monotonic AC sweep.
-FREQ_METRICS = ("bw_3db", "peaking_db", "gain_db_max", "gain_db_first")
+FREQ_METRICS = (
+    "bw_3db",
+    "peaking_db",
+    "gain_db_max",
+    "gain_db_first",
+    "phase_deg_first",
+)
 METRIC_NAMES = TIME_METRICS + TRANSIENT_METRICS + FREQ_METRICS
 
 _SETTLING_PRESETS: dict[str, float] = {
@@ -276,6 +282,10 @@ def _compute_metric(
 
     if metric in FREQ_METRICS:
         db, ref = _response_db(values)
+        if metric == "phase_deg_first":
+            # arg(H) at the first sweep point. Do not set abs: true on this
+            # check — np.abs() would wipe the angle. Not a loop-stability tool.
+            return float(np.angle(np.asarray(values).flat[0], deg=True))
         if metric == "gain_db_first":
             return 20.0 * float(np.log10(ref)) if ref > 0.0 else float("nan")
         if metric == "peaking_db":

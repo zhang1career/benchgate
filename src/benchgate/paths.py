@@ -86,6 +86,8 @@ def benchgate_paths(
     reports_path = reports_path.resolve()
 
     global_models = resolved_home / "models"
+    global_sim_profile = resolved_home / "config" / "sim_profiles.yaml"
+    local_sim_profile = models / "sim_profiles.yaml"
     return BenchgatePaths(
         home=resolved_home,
         design=design,
@@ -96,7 +98,7 @@ def benchgate_paths(
         global_models=global_models,
         subckt=global_models / "subckt",
         config=resolved_home / "config",
-        sim_profile=resolved_home / "config" / "sim_profiles.yaml",
+        sim_profile=local_sim_profile if local_sim_profile.is_file() else global_sim_profile,
         instruments=resolved_home / "config" / "instruments.yaml",
         reports=reports_path,
         state=design_state_path(resolved_home, design),

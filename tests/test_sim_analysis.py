@@ -169,6 +169,10 @@ def test_ac_bandwidth_and_peaking_metrics(tmp_path: Path) -> None:
 
     # a response that never falls 3 dB has no bandwidth inside the swept range
     assert _compute_metric(sig["v(flat)"], "bw_3db", axis=axis) == float("inf")
+
+    # resistive (real) first point → 0°; a lag has negative phase
+    assert np.isclose(_compute_metric(sig["v(flat)"], "phase_deg_first"), 0.0, atol=1e-6)
+    assert _compute_metric(sig["v(lp)"], "phase_deg_first") < 0.0
     # and bw_3db without an axis cannot be computed rather than being guessed
     assert np.isnan(_compute_metric(sig["v(lp)"], "bw_3db"))
 

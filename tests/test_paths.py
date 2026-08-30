@@ -26,6 +26,18 @@ def test_benchgate_paths_anchor_on_design(tmp_path: Path, monkeypatch) -> None:
     assert p.state.parent == tmp_path / "home" / "state"
     assert p.blocks_yaml == design / "models" / "blocks.yaml"
     assert p.blocks_dir == design / "models" / "blocks"
+    assert p.sim_profile == tmp_path / "home" / "config" / "sim_profiles.yaml"
+
+
+def test_design_sim_profiles_override_global(tmp_path: Path, monkeypatch) -> None:
+    """A board-owned models/sim_profiles.yaml is the regression source of truth."""
+    monkeypatch.setenv("BENCHGATE_HOME", str(tmp_path / "home"))
+    design = tmp_path / "proj" / "myboard"
+    (design / "models").mkdir(parents=True)
+    local = design / "models" / "sim_profiles.yaml"
+    local.write_text("local_only:\n  description: board\n")
+    p = benchgate_paths(design)
+    assert p.sim_profile == local.resolve()
 
 
 def test_resolve_project_path_relative_to_design(tmp_path: Path) -> None:
