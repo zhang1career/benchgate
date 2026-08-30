@@ -73,6 +73,9 @@ def test_strip_dnp_elements() -> None:
     assert "benchgate: DNP omitted" in out
     assert "R7 Net-_U1-TRIG_ VIN DNP" not in out
     assert "R1 VIN GND 10k" in out
+    tagged = strip_dnp_elements("C90 GIC_A GIC_B DNP_GIC\nR90 GND MODE DNP_MODE\n")
+    assert "C90 GIC_A GIC_B DNP_GIC" not in tagged
+    assert "R90 GND MODE DNP_MODE" not in tagged
 
 
 def test_inject_diode_models() -> None:

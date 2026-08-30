@@ -15,7 +15,8 @@ from benchgate.sim.netlist import (
 )
 
 _PLACEHOLDER_LINE_RE = re.compile(r"^(\S+)\s+__\1\b.*$")
-_DNP_LINE_RE = re.compile(r"^(\S+\s+\S+\s+\S+)\s+DNP\s*$", re.IGNORECASE | re.MULTILINE)
+# Value DNP, or DNP_GIC / DNP_MODE-style placeholders.
+_DNP_LINE_RE = re.compile(r"^(\S+\s+\S+\s+\S+)\s+DNP\S*\s*$", re.IGNORECASE | re.MULTILINE)
 
 _KICAD_PIN_SUFFIX: dict[str, tuple[str, ...]] = {
     "TRIG": ("TRIG",),
