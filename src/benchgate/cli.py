@@ -22,7 +22,7 @@ CLI_DESCRIPTION = (
 
 DOCS_EPILOG = """\
 documentation (in the benchgate install / source tree):
-  docs/CLI_REFERENCE.md     all leaf commands (39)
+  docs/CLI_REFERENCE.md     all leaf commands (43)
   docs/diagrams/command-tree.puml   CLI mindmap
   docs/examples/blocks.yaml         top-down blocks template
   docs/examples/bench_compare.yaml  bench vs sim probe mapping
@@ -385,12 +385,21 @@ def cmd_kicad_sim_fields(args: argparse.Namespace) -> int:
 
 
 def _lab_overrides(args: argparse.Namespace) -> dict:
+    from benchgate.instruments.capabilities import ROLE_CAPABILITY
+
     out = {}
-    for role in ("scope", "dmm", "awg", "sa", "rfgen", "vna"):
+    for role in ROLE_CAPABILITY:
         val = getattr(args, role, None)
         if val:
             out[role] = val
     return out
+
+
+def _add_role_override_args(parser: argparse.ArgumentParser) -> None:
+    from benchgate.instruments.capabilities import ROLE_CAPABILITY
+
+    for role in ROLE_CAPABILITY:
+        parser.add_argument(f"--{role}", default=None, help=f"Override {role} instrument name")
 
 
 def cmd_lab_list(args: argparse.Namespace) -> int:
@@ -630,6 +639,162 @@ def cmd_lab_sa_cal(args: argparse.Namespace) -> int:
     result = dispatch("lab_sa_cal", params)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
+
+
+def cmd_lab_thermal_capture(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    if args.frames is not None:
+        params["frames"] = args.frames
+    if args.reduce:
+        params["reduce"] = args.reduce
+    if args.threshold is not None:
+        params["threshold"] = args.threshold
+    for key in ("origin", "scale_x", "scale_y", "coord_unit", "warmup_s", "distance_mm", "ambient_bin"):
+        val = getattr(args, key, None)
+        if val is not None:
+            params[key] = val
+    if args.flip_x:
+        params["flip_x"] = True
+    if args.flip_y:
+        params["flip_y"] = True
+    if args.rotate_quadrants:
+        params["rotate_quadrants"] = args.rotate_quadrants
+    if args.component_ref:
+        params["component_ref"] = args.component_ref
+    tags = _parse_tags(args.tags)
+    if tags:
+        params["tags"] = tags
+    if args.homography:
+        params["homography"] = list(args.homography)
+    if getattr(args, "homography_file", None):
+        params["homography_file"] = args.homography_file
+    if getattr(args, "apply_calibration", False):
+        params["apply_calibration"] = True
+    result = dispatch("lab_thermal_capture", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_hotspot(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.session:
+        params["session_id"] = args.session
+    if args.threshold is not None:
+        params["threshold"] = args.threshold
+    if args.channel:
+        params["channel"] = args.channel
+    for key in ("origin", "scale_x", "scale_y", "coord_unit"):
+        val = getattr(args, key, None)
+        if val is not None:
+            params[key] = val
+    result = dispatch("lab_thermal_hotspot", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_calibrate(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design, "points": list(args.point)}
+    if args.instrument_idn:
+        params["instrument_idn"] = args.instrument_idn
+    result = dispatch("lab_thermal_calibrate", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_map(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "session_id": args.session,
+    }
+    if args.homography:
+        params["homography"] = list(args.homography)
+    if getattr(args, "homography_file", None):
+        params["homography_file"] = args.homography_file
+    result = dispatch("lab_thermal_map", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_register(args: argparse.Namespace) -> int:
+    params: dict = {
+        "design_dir": args.design,
+        "length_mm": args.length_mm,
+        "width_mm": args.width_mm,
+    }
+    if args.session:
+        params["session_id"] = args.session
+    if args.threshold is not None:
+        params["threshold"] = args.threshold
+    if args.channel:
+        params["channel"] = args.channel
+    if args.path:
+        params["path"] = args.path
+    result = dispatch("lab_thermal_register", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_verify_refs(args: argparse.Namespace) -> int:
+    result = dispatch("lab_thermal_verify_refs", {"design_dir": args.design})
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0 if result.get("ok") else 1
+
+
+def cmd_lab_thermal_baseline(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design, "frames": args.frames}
+    if args.instrument:
+        params["instrument"] = args.instrument
+    for key in ("warmup_s", "distance_mm", "ambient_bin"):
+        val = getattr(args, key, None)
+        if val is not None:
+            params[key] = val
+    if args.path:
+        params["path"] = args.path
+    result = dispatch("lab_thermal_baseline", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_thermal_alert(args: argparse.Namespace) -> int:
+    params: dict = {"design_dir": args.design}
+    if args.session:
+        params["session_id"] = args.session
+    if args.frames is not None:
+        params["frames"] = args.frames
+    if args.reduce:
+        params["reduce"] = args.reduce
+    if args.channel:
+        params["channel"] = args.channel
+    if args.baseline_file:
+        params["baseline_file"] = args.baseline_file
+    for key in (
+        "delta_warn",
+        "delta_fail",
+        "k_sigma_warn",
+        "k_sigma_fail",
+        "min_area_px",
+        "max_regions",
+        "warmup_s",
+        "distance_mm",
+        "ambient_bin",
+    ):
+        val = getattr(args, key, None)
+        if val is not None:
+            params[key] = val
+    params["require_baseline"] = not bool(getattr(args, "no_require_baseline", False))
+    if args.homography:
+        params["homography"] = list(args.homography)
+    if getattr(args, "homography_file", None):
+        params["homography_file"] = args.homography_file
+    if getattr(args, "apply_calibration", False):
+        params["apply_calibration"] = True
+    if args.instrument:
+        params["instrument"] = args.instrument
+    result = dispatch("lab_thermal_alert", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 1 if result.get("severity") == "fail" else 0
 
 
 def cmd_lab_sa_sparam(args: argparse.Namespace) -> int:
@@ -1034,9 +1199,7 @@ def main(argv: list[str] | None = None) -> int:
     lch.add_argument("--component-ref", dest="component_ref", required=True)
     lch.add_argument("--mpn", required=True)
     lch.add_argument("--kicad-key", dest="kicad_key", required=True)
-    lch.add_argument("--scope", default=None)
-    lch.add_argument("--dmm", default=None)
-    lch.add_argument("--awg", default=None)
+    _add_role_override_args(lch)
     lch.add_argument("--tags", default=None, help="Session tags (default: characterize)")
     lch.add_argument("--no-rerun-sim", action="store_true", help="Skip sim+gate after characterize")
     lch.set_defaults(func=cmd_lab_characterize)
@@ -1133,6 +1296,113 @@ def main(argv: list[str] | None = None) -> int:
     lsasp.add_argument("--tags", default=None)
     lsasp.add_argument("--out", default=None, help="Export captured trace to CSV")
     lsasp.set_defaults(func=cmd_lab_sa_sparam)
+
+    lth = lab_sub.add_parser("thermal", help="Thermal imager (role: thermal; Umeko DEC-H)")
+    th_sub = lth.add_subparsers(dest="lab_thermal_cmd", required=True)
+
+    lthc = th_sub.add_parser("capture", help="Capture a thermal frame → Session")
+    _add_design_arg(lthc)
+    lthc.add_argument("--instrument", default=None)
+    lthc.add_argument("--frames", type=int, default=1)
+    lthc.add_argument("--reduce", default="max", choices=["max", "mean", "last", "median"])
+    lthc.add_argument("--threshold", type=float, default=None)
+    lthc.add_argument("--origin", default="top_left", choices=["top_left", "bottom_left", "center"])
+    lthc.add_argument("--scale-x", dest="scale_x", type=float, default=None)
+    lthc.add_argument("--scale-y", dest="scale_y", type=float, default=None)
+    lthc.add_argument("--coord-unit", dest="coord_unit", default=None)
+    lthc.add_argument("--flip-x", dest="flip_x", action="store_true")
+    lthc.add_argument("--flip-y", dest="flip_y", action="store_true")
+    lthc.add_argument("--rotate-quadrants", dest="rotate_quadrants", type=int, default=0)
+    lthc.add_argument("--warmup-s", dest="warmup_s", type=float, default=None)
+    lthc.add_argument("--distance-mm", dest="distance_mm", type=float, default=None)
+    lthc.add_argument("--ambient-bin", dest="ambient_bin", default=None)
+    lthc.add_argument("--component-ref", dest="component_ref", default=None)
+    lthc.add_argument("--tags", default=None)
+    lthc.add_argument("--homography", action="append", default=None, help="px,py:mmx,mmy (repeat 4 times)")
+    lthc.add_argument("--homography-file", dest="homography_file", default=None)
+    lthc.add_argument(
+        "--apply-calibration",
+        dest="apply_calibration",
+        action="store_true",
+        help="Apply stored count→degC calibration (fails if none exists)",
+    )
+    lthc.set_defaults(func=cmd_lab_thermal_capture)
+
+    lthh = th_sub.add_parser("hotspot", help="Recompute hotspot from a stored session")
+    _add_design_arg(lthh)
+    lthh.add_argument("--session", default=None)
+    lthh.add_argument("--channel", default="thermal")
+    lthh.add_argument("--threshold", type=float, default=None)
+    lthh.add_argument("--origin", default=None, choices=["top_left", "bottom_left", "center"])
+    lthh.add_argument("--scale-x", dest="scale_x", type=float, default=None)
+    lthh.add_argument("--scale-y", dest="scale_y", type=float, default=None)
+    lthh.add_argument("--coord-unit", dest="coord_unit", default=None)
+    lthh.set_defaults(func=cmd_lab_thermal_hotspot)
+
+    lthk = th_sub.add_parser("calibrate", help="Store two-point count→degC calibration")
+    _add_design_arg(lthk)
+    lthk.add_argument("--point", action="append", required=True, help="count:degC (repeat)")
+    lthk.add_argument("--instrument-idn", dest="instrument_idn", default=None)
+    lthk.set_defaults(func=cmd_lab_thermal_calibrate)
+
+    lthm = th_sub.add_parser("map", help="Map session hotspot onto KiCad footprints")
+    _add_design_arg(lthm)
+    lthm.add_argument("--session", required=True)
+    lthm.add_argument("--homography", action="append", default=None, help="px,py:mmx,mmy (repeat 4 times)")
+    lthm.add_argument("--homography-file", dest="homography_file", default=None)
+    lthm.set_defaults(func=cmd_lab_thermal_map)
+
+    lthr = th_sub.add_parser("register", help="4 LED / heat points → fixture-local homography")
+    _add_design_arg(lthr)
+    lthr.add_argument("--session", default=None)
+    lthr.add_argument("--length-mm", dest="length_mm", type=float, required=True, help="Long side of the rectangle (mm)")
+    lthr.add_argument("--width-mm", dest="width_mm", type=float, required=True, help="Short side of the rectangle (mm)")
+    lthr.add_argument("--threshold", type=float, default=None)
+    lthr.add_argument("--channel", default="thermal")
+    lthr.add_argument("--path", default=None, help="Override yaml output path")
+    lthr.set_defaults(func=cmd_lab_thermal_register)
+
+    lthv = th_sub.add_parser("verify-refs", help="Verify PCB footprint refs match schematic")
+    _add_design_arg(lthv)
+    lthv.set_defaults(func=cmd_lab_thermal_verify_refs)
+
+    lthb = th_sub.add_parser("baseline", help="Capture idle-state median+sigma baseline for a fixture")
+    _add_design_arg(lthb)
+    lthb.add_argument("--instrument", default=None)
+    lthb.add_argument("--frames", type=int, default=16)
+    lthb.add_argument("--warmup-s", dest="warmup_s", type=float, default=None)
+    lthb.add_argument("--distance-mm", dest="distance_mm", type=float, default=None)
+    lthb.add_argument("--ambient-bin", dest="ambient_bin", default=None)
+    lthb.add_argument("--path", default=None, help="Override baseline .npz path")
+    lthb.set_defaults(func=cmd_lab_thermal_baseline)
+
+    ltha = th_sub.add_parser("alert", help="ΔT alert vs baseline; map each region to KiCad candidates")
+    _add_design_arg(ltha)
+    ltha.add_argument("--session", default=None)
+    ltha.add_argument("--instrument", default=None)
+    ltha.add_argument("--frames", type=int, default=1)
+    ltha.add_argument("--reduce", default="median", choices=["max", "mean", "last", "median"])
+    ltha.add_argument("--channel", default="thermal")
+    ltha.add_argument("--baseline-file", dest="baseline_file", default=None)
+    ltha.add_argument("--delta-warn", dest="delta_warn", type=float, default=None)
+    ltha.add_argument("--delta-fail", dest="delta_fail", type=float, default=None)
+    ltha.add_argument("--k-sigma-warn", dest="k_sigma_warn", type=float, default=None)
+    ltha.add_argument("--k-sigma-fail", dest="k_sigma_fail", type=float, default=None)
+    ltha.add_argument("--min-area-px", dest="min_area_px", type=int, default=None)
+    ltha.add_argument("--max-regions", dest="max_regions", type=int, default=None)
+    ltha.add_argument(
+        "--no-require-baseline",
+        dest="no_require_baseline",
+        action="store_true",
+        help="Allow ΔT vs frame median when no baseline file exists",
+    )
+    ltha.add_argument("--warmup-s", dest="warmup_s", type=float, default=None)
+    ltha.add_argument("--distance-mm", dest="distance_mm", type=float, default=None)
+    ltha.add_argument("--ambient-bin", dest="ambient_bin", default=None)
+    ltha.add_argument("--homography", action="append", default=None)
+    ltha.add_argument("--homography-file", dest="homography_file", default=None)
+    ltha.add_argument("--apply-calibration", dest="apply_calibration", action="store_true")
+    ltha.set_defaults(func=cmd_lab_thermal_alert)
 
     p_model = sub.add_parser("model", help="Local model providers (LTspice/… → ngspice subckt)")
     model_sub = p_model.add_subparsers(dest="model_cmd", required=True)

@@ -1,0 +1,26 @@
+id: thermal-unit
+version: 1
+source: counts-only thermal sessions must not satisfy degC specs
+applies_to:
+  - gate
+severity_default: fail
+
+rules:
+  # Fails unless the latest thermal session was captured with
+  # --apply-calibration after a two-point `lab thermal calibrate`.
+  # Counts-only captures cannot satisfy a degC spec.
+  - id: require_degc_for_temp_spec
+    when: {}
+    limit:
+      type: require_unit
+      unit: degC
+    severity: fail
+    evidence: gate_report.thermal
+
+  - id: fixture_id_stable
+    when: {}
+    limit:
+      type: fixture_id_match
+      fixture_id: REPLACE_ME
+    severity: warn
+    evidence: gate_report.thermal

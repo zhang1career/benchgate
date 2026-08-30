@@ -534,9 +534,12 @@ def build_gate_report(
         except (json.JSONDecodeError, OSError):
             pass
 
+    thermal_evidence = _latest_thermal_evidence(captured_dir)
+
     gate_payload = {
         "entries": [asdict(e) for e in entries],
         "comparisons": board_comparisons,
+        "thermal": thermal_evidence,
         "waveform_thresholds": {
             "rmse_warn_v": DEFAULT_RMSE_WARN_V,
             "rmse_fail_v": DEFAULT_RMSE_FAIL_V,
@@ -589,8 +592,37 @@ def build_gate_report(
             "block_sweep_aggregates": (
                 block_sweep_data.get("aggregates") if block_sweep_data else None
             ),
+            "thermal": thermal_evidence,
         },
     )
+
+
+def _latest_thermal_evidence(captured_dir: Path) -> dict[str, Any] | None:
+    try:
+        store = LabDataStore(captured_dir)
+    except Exception:
+        return None
+    latest = None
+    for meta in reversed(store.list_sessions()):
+        if any(ch.kind == "frame2d" for ch in meta.channels):
+            latest = meta
+            break
+    if latest is None:
+        return None
+    ch = next((c for c in latest.channels if c.kind == "frame2d"), None)
+    extra = ch.extra if ch else {}
+    unit = str(extra.get("unit", "count"))
+    return {
+        "session_id": latest.session_id,
+        "unit": unit,
+        "frame_unit_is_degc": float(latest.derived.get("frame_unit_is_degc", 1.0 if unit == "degC" else 0.0)),
+        "fixture_id": extra.get("fixture_id"),
+        "fixture_id_hash": latest.derived.get("fixture_id_hash"),
+        "calibration_kind": extra.get("calibration_kind"),
+        "calibration_slope": extra.get("calibration_slope"),
+        "calibration_offset": extra.get("calibration_offset"),
+        "derived": dict(latest.derived),
+    }
 
 
 def write_gate_report(

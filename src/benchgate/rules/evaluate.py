@@ -218,6 +218,37 @@ def _evaluate_limit(rule: RuleDef, ctx: RuleContext) -> tuple[bool, str]:
             return False, f"sweep min {worst:g} below {float(lo):g}"
         return True, f"sweep min {worst:g} >= {float(lo):g}"
 
+    if ltype == "require_unit":
+        expected = str(limit.get("unit") or "")
+        thermal = (ctx.gate_report or {}).get("thermal") or {}
+        actual = thermal.get("unit")
+        flag = thermal.get("frame_unit_is_degc")
+        if actual is None and flag is None:
+            return False, "no thermal unit evidence in gate report (capture a thermal session)"
+        if expected == "degC":
+            is_degc = actual == "degC" or (isinstance(flag, Real) and float(flag) >= 0.5)
+            if not is_degc:
+                return False, "evidence unit is count; spec requires degC (refuse to compare)"
+            slope = thermal.get("calibration_slope")
+            if slope is None:
+                return False, "degC evidence has no slope (calibration not persisted)"
+            return True, "evidence unit is degC"
+        if actual and actual != expected:
+            return False, f"evidence unit {actual!r} != required {expected!r}"
+        return True, f"evidence unit is {actual or expected}"
+
+    if ltype == "fixture_id_match":
+        expected = str(limit.get("fixture_id") or "")
+        thermal = (ctx.gate_report or {}).get("thermal") or {}
+        actual = thermal.get("fixture_id")
+        if not expected:
+            return False, "fixture_id_match requires fixture_id"
+        if not actual:
+            return False, "no fixture_id on latest thermal session"
+        if str(actual) != expected:
+            return False, f"fixture_id {actual!r} != expected {expected!r} (cross-fixture counts)"
+        return True, "fixture_id matches"
+
     return False, f"unknown limit type {ltype!r}"
 
 

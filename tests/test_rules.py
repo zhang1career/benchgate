@@ -144,3 +144,50 @@ def test_load_bench_waveform_rules_pack():
     pack = load_rule_pack(_examples_rules("bench-waveform.yaml"))
     assert pack.id == "bench-waveform"
     assert any(r.limit.get("type") == "waveform_rmse_lte" for r in pack.rules)
+
+
+def test_require_unit_fails_on_counts():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"unit": "count", "frame_unit_is_degc": 0.0, "fixture_id": "abc"}}),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and not unit[0].passed
+    assert "count" in unit[0].message
+
+
+def test_require_unit_passes_on_degc():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(
+            gate_report={
+                "thermal": {
+                    "unit": "degC",
+                    "frame_unit_is_degc": 1.0,
+                    "fixture_id": "REPLACE_ME",
+                    "calibration_slope": 0.1,
+                    "calibration_offset": -273.15,
+                }
+            }
+        ),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and unit[0].passed
+    fix = [r for r in ev.results if r.rule_id == "fixture_id_stable"]
+    assert fix and fix[0].passed
+
+
+def test_require_unit_fails_degc_without_slope():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"unit": "degC", "frame_unit_is_degc": 1.0, "fixture_id": "abc"}}),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and not unit[0].passed
+    assert "slope" in unit[0].message

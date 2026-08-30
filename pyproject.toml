@@ -37,3 +37,6 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires external design files or captured sessions",
+]

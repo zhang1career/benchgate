@@ -4,7 +4,8 @@ Transports:
 
 * ``VisaTransport``        — message-based SCPI over pyvisa (oscilloscope).
 * ``SerialScpiTransport``  — SCPI framing over pyserial (HTOOL-SA8 CDC-ACM).
-* ``SerialTransport``      — raw serial; passive telemetry DMMs and TARS shell.
+* ``SerialTransport``      — raw serial; passive telemetry DMMs.
+* ``SerialShellTransport`` — CDC text shell + optional binary frames (TARS, Umeko DEC-H).
 
 Third-party libraries are imported lazily so the package imports without the
 optional ``[lab]`` extra installed.
@@ -16,6 +17,7 @@ import time
 from typing import Any, Protocol, runtime_checkable
 
 from .errors import (
+    DecodeError,
     InstrumentConnectionError,
     TimeoutInstrumentError,
     TransientInstrumentError,
@@ -362,3 +364,143 @@ class SerialTransport:
             else:
                 time.sleep(0.01)
         return buf.decode("ascii", errors="replace")
+
+
+class SerialShellTransport:
+    """CDC / UART text shell with optional fixed-size binary payloads.
+
+    Wraps :class:`SerialTransport`. Drivers that already speak ``write`` /
+    ``read_until_text`` (TARS) can use this as a drop-in; thermal / binary-frame
+    drivers use :meth:`command`, :meth:`drain`, :meth:`read_exactly`, and
+    :meth:`read_until_marker`.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        *,
+        baud: int = 115200,
+        timeout_s: float = 2.0,
+        assert_dtr: bool = True,
+        write_termination: str = "\r\n",
+        inner: SerialTransport | None = None,
+    ) -> None:
+        self.port = port
+        self.baud = baud
+        self.timeout_s = timeout_s
+        self.assert_dtr = assert_dtr
+        self.write_termination = write_termination
+        self._ser = inner or SerialTransport(
+            port,
+            baud=baud,
+            bytesize=8,
+            parity="N",
+            stopbits=1,
+            timeout_s=timeout_s,
+            dtr=True if assert_dtr else None,
+        )
+        self._pushback = bytearray()
+
+    @property
+    def is_open(self) -> bool:
+        return self._ser.is_open
+
+    def open(self) -> None:
+        self._ser.open()
+        if self.assert_dtr:
+            try:
+                self._ser.set_dtr(True)
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self._ser.close()
+
+    def set_dtr(self, value: bool) -> None:
+        self._ser.set_dtr(value)
+
+    def set_rts(self, value: bool) -> None:
+        self._ser.set_rts(value)
+
+    def flush_input(self) -> None:
+        self._pushback.clear()
+        self._ser.flush_input()
+
+    def write(self, data: bytes | str) -> None:
+        self._ser.write(data)
+
+    def read(self, size: int) -> bytes:
+        if self._pushback:
+            take = bytes(self._pushback[:size])
+            del self._pushback[:size]
+            if len(take) < size:
+                take += self._ser.read(size - len(take))
+            return take
+        return self._ser.read(size)
+
+    def read_until(self, expected: bytes, *, max_bytes: int = 4096) -> bytes:
+        return self._ser.read_until(expected, max_bytes=max_bytes)
+
+    def read_line(self) -> bytes:
+        return self._ser.read_line()
+
+    def read_until_text(self, marker: str, *, deadline_s: float) -> str:
+        return self._ser.read_until_text(marker, deadline_s=deadline_s)
+
+    def drain(self, quiet_s: float = 0.3, *, max_bytes: int = 1_000_000) -> bytes:
+        """Read until ``quiet_s`` elapses with no new bytes."""
+        buf = bytearray()
+        last = time.monotonic()
+        deadline = time.monotonic() + max(self.timeout_s, quiet_s * 20)
+        while time.monotonic() < deadline:
+            chunk = self.read(4096)
+            if chunk:
+                buf.extend(chunk)
+                last = time.monotonic()
+                if len(buf) >= max_bytes:
+                    break
+            elif time.monotonic() - last >= quiet_s:
+                break
+            else:
+                time.sleep(0.01)
+        return bytes(buf)
+
+    def command(self, cmd: str, *, quiet_s: float = 0.3) -> str:
+        """Send a text command and return the drained response as text."""
+        self.flush_input()
+        term = self.write_termination
+        self.write(cmd.rstrip("\r\n") + term)
+        return self.drain(quiet_s).decode("ascii", errors="replace")
+
+    def read_exactly(self, n: int, *, timeout_s: float) -> bytes:
+        buf = bytearray()
+        deadline = time.monotonic() + timeout_s
+        while len(buf) < n and time.monotonic() < deadline:
+            chunk = self.read(n - len(buf))
+            if chunk:
+                buf.extend(chunk)
+            else:
+                time.sleep(0.005)
+        if len(buf) < n:
+            raise TimeoutInstrumentError(f"short read: expected {n}, got {len(buf)}")
+        return bytes(buf)
+
+    def read_until_marker(self, marker: bytes, *, timeout_s: float, max_bytes: int = 1_000_000) -> bytes:
+        """Accumulate bytes until ``marker`` appears (inclusive)."""
+        if not marker:
+            raise ValueError("marker must be non-empty")
+        buf = bytearray()
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            chunk = self.read(256)
+            if chunk:
+                buf.extend(chunk)
+                idx = buf.find(marker)
+                if idx >= 0:
+                    self._pushback.extend(buf[idx + len(marker) :])
+                    return bytes(buf[: idx + len(marker)])
+                if len(buf) > max_bytes:
+                    raise DecodeError(f"marker {marker!r} not found before max_bytes")
+            else:
+                time.sleep(0.005)
+        raise TimeoutInstrumentError(f"marker {marker!r} not seen")

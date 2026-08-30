@@ -8,6 +8,7 @@ deep inheritance tree. A driver implements the subset it supports:
 * TARS     -> DigitalStimulus (3.3 V logic levels; amplitude is not settable)
 * HTOOL SA8 -> SpectrumAnalyzer + RFSource + VectorAnalyzer
 * tinySA   -> SpectrumAnalyzer + RFSource (no VNA)
+* Umeko DEC-H -> FrameSource + RadiometricSensor (Heimann HTPA 32x32)
 
 ``PwmStimulus`` is reserved for when the TARS firmware wires up general PWM
 (``mcu tim`` is currently a stub); no driver implements it yet.
@@ -19,6 +20,8 @@ from typing import Protocol, runtime_checkable
 
 from .types import (
     CalStandard,
+    Frame2D,
+    Frame2DSeries,
     PeakMode,
     Reading,
     ScanConfig,
@@ -130,6 +133,35 @@ class PwmStimulus(Protocol):
         ...
 
 
+@runtime_checkable
+class FrameSource(Protocol):
+    """Captures 2-D scalar fields on a fixed grid."""
+
+    @property
+    def frame_shape(self) -> tuple[int, int]:
+        ...
+
+    def capture_frame(self) -> Frame2D:
+        ...
+
+    def capture_burst(self, count: int, *, timeout_s: float | None = None) -> Frame2DSeries:
+        ...
+
+
+@runtime_checkable
+class RadiometricSensor(Protocol):
+    """Radiometric (emissivity-dependent) sensing parameters."""
+
+    def get_emissivity(self) -> float:
+        ...
+
+    def set_emissivity(self, value: float) -> None:
+        ...
+
+    def bad_pixels(self) -> list[tuple[int, int]]:
+        ...
+
+
 # Logical role -> required capability. Used by the registry to validate bindings.
 ROLE_CAPABILITY: dict[str, type] = {
     "scope": Oscilloscope,
@@ -138,4 +170,5 @@ ROLE_CAPABILITY: dict[str, type] = {
     "sa": SpectrumAnalyzer,
     "rfgen": RFSource,
     "vna": VectorAnalyzer,
+    "thermal": FrameSource,
 }

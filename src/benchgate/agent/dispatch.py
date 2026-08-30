@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,9 @@ def _paths_for_design(design_dir: str | Path, args: dict[str, Any]):
 
 
 def _role_overrides(args: dict[str, Any]) -> dict[str, str | None]:
-    return {role: args[role] for role in ("scope", "dmm", "awg", "sa", "rfgen", "vna") if args.get(role)}
+    from benchgate.instruments.capabilities import ROLE_CAPABILITY
+
+    return {role: args[role] for role in ROLE_CAPABILITY if args.get(role)}
 
 
 def _open_bench(paths, args: dict[str, Any]):
@@ -286,7 +289,12 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         bench = _open_bench(p, args)
         return {
             "instruments": {
-                n: {"driver": c.driver, "address": c.address, "transport": c.transport}
+                n: {
+                    "driver": c.driver,
+                    "address": c.address,
+                    "transport": c.transport,
+                    "capabilities": sorted(bench.capabilities(n)),
+                }
                 for n, c in bench.instruments.items()
             },
             "roles": bench.roles,
@@ -891,4 +899,704 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             tolerance_jobs=int(args.get("tolerance_jobs", 4)),
         )
 
+    if name == "lab_thermal_capture":
+        return _lab_thermal_capture(args)
+
+    if name == "lab_thermal_hotspot":
+        return _lab_thermal_hotspot(args)
+
+    if name == "lab_thermal_calibrate":
+        return _lab_thermal_calibrate(args)
+
+    if name == "lab_thermal_map":
+        return _lab_thermal_map(args)
+    if name == "lab_thermal_register":
+        return _lab_thermal_register(args)
+
+    if name == "lab_thermal_verify_refs":
+        return _lab_thermal_verify_refs(args)
+
+    if name == "lab_thermal_baseline":
+        return _lab_thermal_baseline(args)
+
+    if name == "lab_thermal_alert":
+        return _lab_thermal_alert(args)
+
     raise NotImplementedError(name)
+
+
+def _geometry_from_args(args: dict[str, Any]):
+    from benchgate.lab.field2d import FrameGeometry
+
+    return FrameGeometry(
+        origin=str(args.get("origin") or "top_left"),
+        x_scale=float(args.get("scale_x", 1.0)),
+        y_scale=float(args.get("scale_y", 1.0)),
+        unit=str(args.get("coord_unit") or "px"),
+        flip_x=bool(args.get("flip_x", False)),
+        flip_y=bool(args.get("flip_y", False)),
+        rotate_quadrants=int(args.get("rotate_quadrants", 0)),
+    )
+
+
+def _reduce_series(series, reduce: str):
+    import numpy as np
+
+    from benchgate.instruments.types import Frame2D
+
+    if reduce == "mean":
+        values = series.values.mean(axis=0)
+    elif reduce == "last":
+        values = series.values[-1]
+    elif reduce == "median":
+        values = np.median(series.values, axis=0)
+    else:
+        values = series.values.max(axis=0)
+    return Frame2D(
+        values=np.asarray(values, dtype=float),
+        unit=series.unit,
+        quantity=series.quantity,
+        timestamp=series.t0_utc,
+        mask=series.mask,
+        calibration=series.calibration,
+        metadata=dict(series.metadata),
+    )
+
+
+def _lab_thermal_capture(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.instruments.types import Frame2D
+    from benchgate.lab.thermal import summarize_thermal
+
+    p = _paths_for_design(args["design_dir"], args)
+    bench = _open_bench(p, args)
+    inst = bench.select(role="thermal", instrument=args.get("instrument"))
+    store = LabDataStore(p.captured)
+    frames_n = max(1, int(args.get("frames", 1)))
+    warmup_s = float(args.get("warmup_s", 0.0))
+    try:
+        if warmup_s > 0:
+            import time
+
+            time.sleep(warmup_s)
+        if frames_n == 1:
+            frame = inst.capture_frame()  # type: ignore[attr-defined]
+        else:
+            series = inst.capture_burst(frames_n)  # type: ignore[attr-defined]
+            frame = _reduce_series(series, str(args.get("reduce") or "max"))
+        emissivity = 1.0
+        if hasattr(inst, "get_emissivity"):
+            try:
+                emissivity = float(inst.get_emissivity())
+            except Exception:
+                emissivity = float(frame.metadata.get("emissivity", 1.0) or 1.0)
+        if args.get("apply_calibration"):
+            from benchgate.lab.thermal import apply_calibration, calibration_path, load_calibration
+
+            cal_path = calibration_path(inst.identify())
+            if not cal_path.is_file():
+                raise FileNotFoundError(
+                    f"no calibration at {cal_path}; run lab thermal calibrate first"
+                )
+            frame = apply_calibration(frame, load_calibration(cal_path))
+        geometry = _geometry_from_args(args)
+        threshold = args.get("threshold")
+        derived = summarize_thermal(
+            frame,
+            geometry=geometry,
+            threshold=None if threshold is None else float(threshold),
+            instrument_idn=inst.identify(),
+            emissivity=emissivity,
+            warmup_s=warmup_s,
+            distance_mm=args.get("distance_mm"),
+            ambient_bin=str(args.get("ambient_bin") or "unknown"),
+        )
+        from benchgate.lab.thermal import fixture_id
+
+        fid = fixture_id(
+            instrument_idn=inst.identify(),
+            emissivity=emissivity,
+            warmup_s=warmup_s,
+            distance_mm=args.get("distance_mm"),
+            ambient_bin=str(args.get("ambient_bin") or "unknown"),
+        )
+        meta_extra = dict(frame.metadata)
+        meta_extra["fixture_id"] = fid
+        meta_extra["warmup_s"] = warmup_s
+        meta_extra["ambient_bin"] = str(args.get("ambient_bin") or "unknown")
+        if args.get("distance_mm") is not None:
+            meta_extra["distance_mm"] = float(args["distance_mm"])
+        frame = Frame2D(
+            values=frame.values,
+            unit=frame.unit,
+            quantity=frame.quantity,
+            timestamp=frame.timestamp,
+            mask=frame.mask,
+            calibration=frame.calibration,
+            metadata=meta_extra,
+        )
+        tags = list(args.get("tags") or [])
+        tags.append(f"fixture:{fid}")
+        meta = store.write_session(
+            component_ref=args.get("component_ref"),
+            design=str(p.design),
+            frames={"thermal": frame},
+            derived=derived,
+            roles={"thermal": bench.instrument_for_role("thermal")},
+            instruments={"thermal": inst.identify()},
+            tags=tags,
+            notes=f"unit={frame.unit} fixture_id={fid}",
+        )
+    finally:
+        inst.disconnect()
+    hits = None
+    resolution: dict[str, Any] = {}
+    if args.get("homography") or args.get("homography_file"):
+        resolution = _homography_resolution(args)
+        hits = _map_hotspot_to_board(
+            args,
+            hotspot_xy=(derived["hotspot_x"], derived["hotspot_y"]),
+        )
+    return {
+        "session_id": meta.session_id,
+        "unit": frame.unit,
+        "shape": [frame.height, frame.width],
+        "derived": derived,
+        "fixture_id": fid,
+        "path": str((meta.path or p.captured) / "thermal.npz"),
+        "kicad_hits": hits,
+        "px_per_mm": resolution.get("px_per_mm"),
+        "coarse_warning": resolution.get("coarse_warning"),
+    }
+
+
+def _lab_thermal_hotspot(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.lab.thermal import summarize_thermal
+
+    p = _paths_for_design(args["design_dir"], args)
+    store = LabDataStore(p.captured)
+    session_id = args.get("session_id") or args.get("session")
+    if not session_id:
+        sessions = [m for m in store.list_sessions() if any(c.kind == "frame2d" for c in m.channels)]
+        if not sessions:
+            raise FileNotFoundError("no frame2d sessions")
+        session_id = sessions[-1].session_id
+    frame = store.load_frame2d(session_id, str(args.get("channel") or "thermal"))
+    geometry = _geometry_from_args(args)
+    threshold = args.get("threshold")
+    stored_fid = frame.metadata.get("fixture_id")
+    derived = summarize_thermal(
+        frame,
+        geometry=geometry,
+        threshold=None if threshold is None else float(threshold),
+        instrument_idn=str(frame.metadata.get("idn") or ""),
+        emissivity=float(frame.metadata.get("emissivity") or 1.0),
+        known_fixture_id=str(stored_fid) if stored_fid else None,
+    )
+    return {
+        "session_id": session_id,
+        "unit": frame.unit,
+        "derived": derived,
+        "fixture_id": stored_fid,
+    }
+
+
+def _lab_thermal_calibrate(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.lab.thermal import affine_from_points, calibration_path, save_calibration
+
+    points_raw = args.get("points") or []
+    parsed: list[tuple[float, float]] = []
+    for item in points_raw:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            parsed.append((float(item[0]), float(item[1])))
+        else:
+            count_s, deg_s = str(item).split(":", 1)
+            parsed.append((float(count_s), float(deg_s)))
+    idn = str(args.get("instrument_idn") or "umeko-dec-h")
+    cal = affine_from_points(parsed, instrument_idn=idn)
+    path = calibration_path(idn)
+    if args.get("path"):
+        path = Path(args["path"])
+    save_calibration(cal, path)
+    return {"kind": cal.kind, "slope": cal.slope, "offset": cal.offset, "path": str(path)}
+
+
+def _homography_items(args: dict[str, Any]) -> list[str]:
+    items = list(args.get("homography") or [])
+    path = args.get("homography_file")
+    if items:
+        return items
+    if path:
+        from benchgate.lab.thermal import load_homography
+
+        data = load_homography(Path(path))
+        pairs = data.get("pairs") or []
+        if len(pairs) < 4:
+            raise ValueError(f"homography file {path} has fewer than 4 pairs")
+        return [str(p) for p in pairs]
+    raise ValueError("homography requires four px,py:mmx,mmy pairs or homography_file")
+
+
+def _homography_resolution(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.lab.board_map import edge_px_per_mm, parse_homography_points
+    from benchgate.lab.thermal import load_homography
+
+    src, dst = parse_homography_points(_homography_items(args))
+    px_x, px_y = edge_px_per_mm(src, dst)
+    warning = ""
+    path = args.get("homography_file")
+    if path:
+        data = load_homography(Path(path))
+        stored = data.get("px_per_mm")
+        if isinstance(stored, list) and len(stored) >= 2:
+            px_x, px_y = float(stored[0]), float(stored[1])
+        if data.get("coarse_warning"):
+            warning = str(data["coarse_warning"])
+    if not warning and min(px_x, px_y) < 1.0:
+        warning = (
+            "32x32 over this rectangle is coarser than 1 px/mm; "
+            "small footprints are candidates only"
+        )
+    return {"px_per_mm": [px_x, px_y], "coarse_warning": warning}
+
+
+def _map_hotspot_to_board(args: dict[str, Any], *, hotspot_xy: tuple[float, float]) -> list[dict[str, Any]]:
+    from benchgate.lab.board_map import (
+        apply_homography,
+        attach_schematic_to_hits,
+        default_board_margin_mm,
+        default_hit_distance_mm,
+        hit_footprints,
+        homography_from_points,
+        load_board_outline,
+        load_pcb_footprints,
+        load_schematic_index,
+        parse_homography_points,
+        point_in_board,
+    )
+
+    resolution = _homography_resolution(args)
+    src, dst = parse_homography_points(_homography_items(args))
+    h = homography_from_points(src, dst)
+    x_mm, y_mm = apply_homography(h, hotspot_xy)
+    extra = {
+        "x_mm": x_mm,
+        "y_mm": y_mm,
+        "px_per_mm": resolution["px_per_mm"],
+        "coarse_warning": resolution["coarse_warning"],
+    }
+    try:
+        outline = load_board_outline(args["design_dir"])
+    except (FileNotFoundError, ImportError, ValueError):
+        outline = None
+    margin_mm = default_board_margin_mm(resolution["px_per_mm"])
+    if outline is not None and not point_in_board(x_mm, y_mm, outline, margin_mm=margin_mm):
+        return [
+            {
+                "reference": None,
+                "distance_mm": None,
+                "inside": False,
+                "status": "out_of_board",
+                "schematic_status": "no_hit",
+                "board_outline_mm": list(outline),
+                **extra,
+            }
+        ]
+    try:
+        footprints = load_pcb_footprints(args["design_dir"])
+        sch_index = load_schematic_index(args["design_dir"])
+    except (FileNotFoundError, ImportError):
+        return [
+            {
+                "reference": None,
+                "distance_mm": None,
+                "inside": False,
+                "status": "no_pcb",
+                "schematic_status": "no_pcb",
+                **extra,
+            }
+        ]
+    max_dist = default_hit_distance_mm(resolution["px_per_mm"])
+    hits = hit_footprints(x_mm, y_mm, footprints, max_distance_mm=max_dist)
+    rows = attach_schematic_to_hits(hits, sch_index)
+    for row in rows:
+        row.update(extra)
+        row["status"] = "hit" if row.get("inside") else "nearby"
+    return rows or [
+        {
+            "reference": None,
+            "distance_mm": None,
+            "inside": False,
+            "status": "hotspot_unassigned",
+            "schematic_status": "no_hit",
+            **extra,
+        }
+    ]
+
+
+def _lab_thermal_map(args: dict[str, Any]) -> dict[str, Any]:
+    p = _paths_for_design(args["design_dir"], args)
+    store = LabDataStore(p.captured)
+    session_id = args.get("session_id") or args.get("session")
+    if not session_id:
+        raise ValueError("lab_thermal_map requires session_id")
+    meta = store.get_session(session_id)
+    xy = (float(meta.derived["hotspot_x"]), float(meta.derived["hotspot_y"]))
+    hits = _map_hotspot_to_board(args, hotspot_xy=xy)
+    resolution = _homography_resolution(args)
+    return {
+        "session_id": session_id,
+        "hotspot_xy": list(xy),
+        "kicad_hits": hits,
+        "px_per_mm": resolution["px_per_mm"],
+        "coarse_warning": resolution["coarse_warning"],
+    }
+
+
+def _lab_thermal_register(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.lab.thermal import homography_path, register_rectangle, save_homography
+
+    p = _paths_for_design(args["design_dir"], args)
+    store = LabDataStore(p.captured)
+    session_id = args.get("session_id") or args.get("session")
+    if not session_id:
+        sessions = [m for m in store.list_sessions() if any(c.kind == "frame2d" for c in m.channels)]
+        if not sessions:
+            raise FileNotFoundError("no frame2d sessions")
+        session_id = sessions[-1].session_id
+    meta = store.get_session(session_id)
+    frame = store.load_frame2d(session_id, str(args.get("channel") or "thermal"))
+    fid = ""
+    for tag in meta.tags or []:
+        if str(tag).startswith("fixture:"):
+            fid = str(tag).split(":", 1)[1]
+            break
+    fid = str(args.get("fixture_id") or frame.metadata.get("fixture_id") or fid)
+    data = register_rectangle(
+        frame,
+        length_mm=float(args["length_mm"]),
+        width_mm=float(args["width_mm"]),
+        threshold=None if args.get("threshold") is None else float(args["threshold"]),
+        fixture_id=fid,
+        session_id=session_id,
+    )
+    path = Path(args["path"]) if args.get("path") else homography_path(fid or session_id)
+    save_homography(data, path)
+    data["path"] = str(path)
+    return data
+
+
+def _lab_thermal_verify_refs(args: dict[str, Any]) -> dict[str, Any]:
+    from benchgate.lab.board_map import verify_pcb_schematic_refs
+
+    result = verify_pcb_schematic_refs(args["design_dir"])
+    return {
+        "ok": result.ok,
+        "pcb_count": len(result.pcb_refs),
+        "schematic_count": len(result.schematic_refs),
+        "common_count": len(result.common),
+        "pcb_only": result.pcb_only,
+        "schematic_only": result.schematic_only,
+        "schematic_only_bom": result.schematic_only_bom,
+    }
+
+
+def _apply_cal_if_requested(args: dict[str, Any], idn: str, frame):
+    if not args.get("apply_calibration"):
+        return frame
+    from benchgate.lab.thermal import apply_calibration, calibration_path, load_calibration
+
+    cal_path = calibration_path(idn)
+    if not cal_path.is_file():
+        raise FileNotFoundError(f"no calibration at {cal_path}; run lab thermal calibrate first")
+    return apply_calibration(frame, load_calibration(cal_path))
+
+
+def _alert_policy_from_args(args: dict[str, Any]):
+    from benchgate.lab.thermal_alert import AlertPolicy
+
+    def _opt(key: str) -> float | None:
+        val = args.get(key)
+        return None if val is None else float(val)
+
+    return AlertPolicy(
+        delta_warn=_opt("delta_warn"),
+        delta_fail=_opt("delta_fail"),
+        k_sigma_warn=_opt("k_sigma_warn"),
+        k_sigma_fail=_opt("k_sigma_fail"),
+        min_area_px=int(args["min_area_px"]) if args.get("min_area_px") is not None else 2,
+        max_regions=int(args["max_regions"]) if args.get("max_regions") is not None else 5,
+        require_baseline=bool(args.get("require_baseline", True)),
+    )
+
+
+def _severity_code(severity: str) -> float:
+    return {"none": 0.0, "warn": 1.0, "fail": 2.0}[severity]
+
+
+def _persist_session_alert(
+    store: LabDataStore,
+    session_id: str,
+    extra_derived: dict[str, float],
+    artifact: dict[str, Any],
+    *,
+    component_ref: str | None = None,
+) -> None:
+    import yaml
+
+    meta = store.get_session(session_id)
+    if meta.path is None:
+        raise FileNotFoundError(f"session {session_id} has no path")
+    derived = dict(meta.derived)
+    derived.update(extra_derived)
+    (meta.path / "derived.json").write_text(json.dumps(derived, indent=2), encoding="utf-8")
+    (meta.path / "thermal_alert.json").write_text(
+        json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    data = yaml.safe_load((meta.path / "session.yaml").read_text(encoding="utf-8"))
+    data["derived"] = derived
+    if component_ref:
+        data["component_ref"] = component_ref
+    (meta.path / "session.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
+
+
+def _map_alert_regions(args: dict[str, Any], regions) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from dataclasses import asdict
+
+    resolution: dict[str, Any] = {}
+    has_h = bool(args.get("homography") or args.get("homography_file"))
+    if has_h:
+        resolution = _homography_resolution(args)
+    mapped: list[dict[str, Any]] = []
+    for region in regions:
+        row = asdict(region)
+        if has_h:
+            hits = _map_hotspot_to_board(args, hotspot_xy=(region.centroid_x, region.centroid_y))
+            row["kicad_hits"] = hits
+            row["status"] = hits[0]["status"] if hits else "hotspot_unassigned"
+            row["x_mm"] = hits[0].get("x_mm") if hits else None
+            row["y_mm"] = hits[0].get("y_mm") if hits else None
+        else:
+            row["kicad_hits"] = []
+            row["status"] = "unmapped"
+        mapped.append(row)
+    return mapped, resolution
+
+
+def _lab_thermal_baseline(args: dict[str, Any]) -> dict[str, Any]:
+    import time
+
+    import numpy as np
+
+    from benchgate.lab.thermal import baseline_path, fixture_id, save_baseline
+
+    p = _paths_for_design(args["design_dir"], args)
+    bench = _open_bench(p, args)
+    inst = bench.select(role="thermal", instrument=args.get("instrument"))
+    n = max(1, int(args.get("frames", 16)))
+    warmup_s = float(args.get("warmup_s", 0.0))
+    try:
+        if warmup_s > 0:
+            time.sleep(warmup_s)
+        if n == 1:
+            frame = inst.capture_frame()  # type: ignore[attr-defined]
+            stack = np.asarray(frame.values, dtype=float)[np.newaxis, ...]
+            unit = frame.unit
+            meta_extra = dict(frame.metadata)
+        else:
+            series = inst.capture_burst(n)  # type: ignore[attr-defined]
+            stack = np.asarray(series.values, dtype=float)
+            unit = series.unit
+            meta_extra = dict(series.metadata)
+        values = np.median(stack, axis=0)
+        sigma = stack.std(axis=0, ddof=0)
+        emissivity = 1.0
+        if hasattr(inst, "get_emissivity"):
+            try:
+                emissivity = float(inst.get_emissivity())
+            except Exception:
+                emissivity = float(meta_extra.get("emissivity", 1.0) or 1.0)
+        fid = fixture_id(
+            instrument_idn=inst.identify(),
+            emissivity=emissivity,
+            warmup_s=warmup_s,
+            distance_mm=args.get("distance_mm"),
+            ambient_bin=str(args.get("ambient_bin") or "unknown"),
+        )
+        path = Path(args["path"]) if args.get("path") else baseline_path(fid)
+        save_baseline(
+            values,
+            sigma,
+            {
+                "fixture_id": fid,
+                "instrument_idn": inst.identify(),
+                "unit": unit,
+                "emissivity": emissivity,
+                "ambient_bin": str(args.get("ambient_bin") or "unknown"),
+                "distance_mm": args.get("distance_mm"),
+                "n_frames": n,
+                "captured_at": datetime.now(timezone.utc).isoformat(),
+            },
+            path,
+        )
+    finally:
+        inst.disconnect()
+    return {
+        "fixture_id": fid,
+        "path": str(path),
+        "sidecar": str(path.with_suffix(".yaml")),
+        "shape": [int(values.shape[0]), int(values.shape[1])],
+        "n_frames": n,
+        "unit": unit,
+    }
+
+
+def _lab_thermal_alert(args: dict[str, Any]) -> dict[str, Any]:
+    import time
+
+    from benchgate.lab.thermal import (
+        baseline_path,
+        fixture_id,
+        load_baseline,
+        summarize_thermal,
+    )
+    from benchgate.lab.thermal_alert import alert_result_to_dict, evaluate_alert
+
+    p = _paths_for_design(args["design_dir"], args)
+    store = LabDataStore(p.captured)
+    session_id = args.get("session_id") or args.get("session")
+    policy = _alert_policy_from_args(args)
+    geometry = _geometry_from_args(args)
+    inst = None
+    fid = ""
+    if session_id:
+        frame = store.load_frame2d(session_id, str(args.get("channel") or "thermal"))
+        idn = str(frame.metadata.get("idn") or "")
+        frame = _apply_cal_if_requested(args, idn, frame)
+        fid = str(frame.metadata.get("fixture_id") or "")
+        if not fid:
+            fid = fixture_id(
+                instrument_idn=idn,
+                emissivity=float(frame.metadata.get("emissivity") or 1.0),
+                distance_mm=frame.metadata.get("distance_mm"),
+                ambient_bin=str(frame.metadata.get("ambient_bin") or "unknown"),
+            )
+        meta = store.get_session(session_id)
+    else:
+        bench = _open_bench(p, args)
+        inst = bench.select(role="thermal", instrument=args.get("instrument"))
+        frames_n = max(1, int(args.get("frames", 1)))
+        warmup_s = float(args.get("warmup_s", 0.0))
+        try:
+            if warmup_s > 0:
+                time.sleep(warmup_s)
+            if frames_n == 1:
+                frame = inst.capture_frame()  # type: ignore[attr-defined]
+            else:
+                series = inst.capture_burst(frames_n)  # type: ignore[attr-defined]
+                frame = _reduce_series(series, str(args.get("reduce") or "median"))
+            emissivity = 1.0
+            if hasattr(inst, "get_emissivity"):
+                try:
+                    emissivity = float(inst.get_emissivity())
+                except Exception:
+                    emissivity = float(frame.metadata.get("emissivity", 1.0) or 1.0)
+            frame = _apply_cal_if_requested(args, inst.identify(), frame)
+            fid = fixture_id(
+                instrument_idn=inst.identify(),
+                emissivity=emissivity,
+                warmup_s=warmup_s,
+                distance_mm=args.get("distance_mm"),
+                ambient_bin=str(args.get("ambient_bin") or "unknown"),
+            )
+            derived_cap = summarize_thermal(
+                frame,
+                geometry=geometry,
+                instrument_idn=inst.identify(),
+                emissivity=emissivity,
+                warmup_s=warmup_s,
+                distance_mm=args.get("distance_mm"),
+                ambient_bin=str(args.get("ambient_bin") or "unknown"),
+                known_fixture_id=fid,
+            )
+            meta_extra = dict(frame.metadata)
+            meta_extra["fixture_id"] = fid
+            from benchgate.instruments.types import Frame2D
+
+            frame = Frame2D(
+                values=frame.values,
+                unit=frame.unit,
+                quantity=frame.quantity,
+                timestamp=frame.timestamp,
+                mask=frame.mask,
+                calibration=frame.calibration,
+                metadata=meta_extra,
+            )
+            meta = store.write_session(
+                design=str(p.design),
+                frames={"thermal": frame},
+                derived=derived_cap,
+                roles={"thermal": bench.instrument_for_role("thermal")},
+                instruments={"thermal": inst.identify()},
+                tags=[f"fixture:{fid}", "thermal-alert"],
+                notes=f"unit={frame.unit} fixture_id={fid}",
+            )
+            session_id = meta.session_id
+        finally:
+            inst.disconnect()
+
+    baseline = None
+    sigma = None
+    baseline_unit = None
+    bpath = Path(args["baseline_file"]) if args.get("baseline_file") else (baseline_path(fid) if fid else None)
+    if bpath is not None and bpath.is_file():
+        baseline, sigma, bmeta = load_baseline(bpath)
+        baseline_unit = str(bmeta.get("unit") or "") or None
+    elif policy.require_baseline:
+        raise FileNotFoundError(f"no thermal baseline at {bpath}; run lab thermal baseline first")
+
+    alert = evaluate_alert(
+        frame,
+        baseline=baseline,
+        sigma=sigma,
+        policy=policy,
+        baseline_unit=baseline_unit,
+        geometry=geometry,
+    )
+    mapped, resolution = _map_alert_regions(args, alert.regions)
+    extra: dict[str, float] = {
+        "alert_severity_code": _severity_code(alert.severity),
+        "alert_region_count": float(len(alert.regions)),
+        "t_delta_peak": float(alert.regions[0].peak_delta) if alert.regions else 0.0,
+        "t_ref": float(alert.t_ref),
+        "alert_baseline_used": 1.0 if alert.baseline_used else 0.0,
+    }
+    component_ref = None
+    if mapped:
+        hits = mapped[0].get("kicad_hits") or []
+        inside = [h for h in hits if h.get("inside") and h.get("reference")]
+        if inside:
+            component_ref = str(inside[0]["reference"])
+        with_ref = [h for h in hits if h.get("reference") and h.get("distance_mm") is not None]
+        if with_ref:
+            extra["alert_top_ref_distance_mm"] = float(with_ref[0]["distance_mm"])
+    artifact = alert_result_to_dict(alert)
+    artifact["regions"] = mapped
+    artifact["px_per_mm"] = resolution.get("px_per_mm")
+    artifact["coarse_warning"] = resolution.get("coarse_warning")
+    _persist_session_alert(store, session_id, extra, artifact, component_ref=component_ref)
+    return {
+        "session_id": session_id,
+        "severity": alert.severity,
+        "unit": alert.unit,
+        "t_ref": alert.t_ref,
+        "threshold_warn": alert.threshold_warn,
+        "threshold_fail": alert.threshold_fail,
+        "policy_source": alert.policy_source,
+        "baseline_used": alert.baseline_used,
+        "regions": mapped,
+        "px_per_mm": resolution.get("px_per_mm"),
+        "coarse_warning": resolution.get("coarse_warning"),
+        "fixture_id": fid,
+    }

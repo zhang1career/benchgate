@@ -41,6 +41,13 @@ right side
 *** lab sa gen\n跟踪源控制
 *** lab sa cal\nS 参数校准
 *** lab sa sparam\nS 参数历史曲线
+*** lab thermal capture\n热成像帧 → Session
+*** lab thermal hotspot\n离线热点 / 阈值
+*** lab thermal calibrate\n两点 count→°C
+*** lab thermal map\n热点 → KiCad 位号
+*** lab thermal register\n4 点矩形单应落盘
+*** lab thermal baseline\n夹具空闲基线帧
+*** lab thermal alert\nΔT 报警 + 位号候选
 ** 模型与预算
 *** model build\nprovider → subckt + provenance
 *** model status\nsource / valid_range / spec

@@ -2,7 +2,7 @@
 # (or set BENCHGATE_HOME to relocate the config root).
 #
 # Precedence for role bindings (highest wins):
-#   CLI/Agent --scope/--dmm/--awg/--sa/--rfgen/--vna  >  <design>/models/lab.yaml  >  this file
+#   CLI/Agent --scope/--dmm/--awg/--sa/--rfgen/--vna/--thermal  >  <design>/models/lab.yaml  >  this file
 #
 # Address overrides (machine-specific, orthogonal to role bindings):
 #   BENCHGATE_INSTRUMENT_<NAME>_ADDRESS
@@ -30,9 +30,10 @@ instruments:
 
   tars_disc:
     driver: tars_shell
-    transport: serial
-    # cu.* for dial-out; screen often uses tty.* — only one client at a time
-    address: "/dev/cu.usbmodem346D345933331"
+    transport: serial_shell
+    # USB product string (pyserial). Or a concrete path: "/dev/cu.usbmodem…"
+    # (CDC suffix changes when the Discovery is re-plugged.)
+    address: "TARS Virtual COM Port"
     options:
       baud: 115200
       assert_dtr: true
@@ -57,6 +58,15 @@ instruments:
       points: 290
       # dbm_offset: 128   # classic; Ultra auto-detected as 174 from `info`
 
+  pico_thermal:
+    driver: umeko_dec_h
+    transport: serial_shell
+    address: "/dev/cu.usbmodem1411201"
+    options:
+      baud: 115200
+      timeout_s: 3.0
+      assert_dtr: true
+
 roles:
   scope: scope_main
   dmm: dmm_bench
@@ -64,3 +74,4 @@ roles:
   sa: sa8_bench          # or tinysa_bench
   rfgen: sa8_bench       # or tinysa_bench
   vna: sa8_bench         # tinySA has no VNA capability
+  thermal: pico_thermal  # Umeko DEC-H Heimann HTPA32x32 (raw counts)

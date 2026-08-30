@@ -117,6 +117,7 @@ flowchart TB
 | ERC / DRC / BOM / Gerber | `kicad-cli` 或 kicad-mcp-pro | 成熟 |
 | 可制造性、批次一致性评估 | `sim tolerance`（LHS/adaptive/sequential/auto、并行、粗→细、块级 MC、环境轴、mix）→ `gate report` yield 规则 | **已覆盖**（M1–M4） |
 | Agent 加符号、拉线、改 PCB、布局 | kicad-mcp-pro / kicad-tools | 生态已有 |
+| 热成像实时预览 / 伪彩 UI / 视频录制 | 设备自带屏幕或上游上位机 | benchgate 只采帧并提取可 gate 的标量 |
 | 符号库搜索、LCSC 询价 | kicad-mcp-pro `lib_*` | 非 benchgate 目标 |
 | FreeRouting  autoroute | kicad-mcp-pro `route_*` | 非 benchgate 目标 |
 | SI/PI/EMC 启发式检查 | kicad-mcp-pro `si_*` / `emc_*` | 可选旁路，非核心 |
@@ -443,6 +444,13 @@ CLI 与子命令对应：`benchgate mapping sync` ↔ `mapping_sync`，`benchgat
 | `lab_query_sessions` | `lab query sessions` | 历史 Session |
 | `lab_metric_series` | `lab query metric` | 跨会话指标序列 |
 | `lab_metric_drift` | `lab query drift` | 指标漂移趋势 |
+| `lab_thermal_capture` | `lab thermal capture` | 热成像帧 → Session（默认 counts；`--apply-calibration` 才写 °C） |
+| `lab_thermal_hotspot` | `lab thermal hotspot` | 离线热点 / 阈值 |
+| `lab_thermal_calibrate` | `lab thermal calibrate` | 两点标定落盘 |
+| `lab_thermal_map` | `lab thermal map` | 热点 → KiCad footprint 候选 |
+| `lab_thermal_register` | `lab thermal register` | 4 亮点 → 夹具矩形单应 |
+| `lab_thermal_baseline` | `lab thermal baseline` | 空闲态 median+sigma 基线 |
+| `lab_thermal_alert` | `lab thermal alert` | ΔT 报警 + 多区域位号候选 |
 
 **自顶向下**
 
@@ -685,11 +693,13 @@ SerialScpi      ──>  HtoolSA8           ──>  SpectrumAnalyzer +
                      (HTOOL SA8)             RFSource + VectorAnalyzer ──> sa / rfgen / vna
 SerialTransport ──>  TinySA             ──>  SpectrumAnalyzer +
                      (tinySA USB)            RFSource              ──>  sa / rfgen
+SerialShell     ──>  UmekoDecH          ──>  FrameSource +
+                     (DEC-H / HTPA32x32)     RadiometricSensor     ──>  thermal
 ```
 
 设计模式：Bridge（传输与驱动解耦，pyvisa/pyserial 懒加载）、Adapter（包装既有设备脚本）、Protocol（按能力拆分，不强制深继承）、Factory + Registry（`DRIVER_REGISTRY` + `load_bench`）。
 
-- **Transport**：`VisaTransport`（SCPI）、`SerialScpiTransport`（CDC SCPI，如 SA8）、`SerialTransport`（被动遥测 / shell，如 UT61E、TARS、tinySA）。
+- **Transport**：`VisaTransport`（SCPI）、`SerialScpiTransport`（CDC SCPI，如 SA8）、`SerialTransport`（被动遥测，如 UT61E、tinySA）、`SerialShellTransport`（CDC 文本壳 + 二进制帧，如 TARS、Umeko DEC-H）。
 - **能力按硬件真实情况拆分**：UT61E 只读（无 configure）；TARS 输出固定逻辑电平（`DigitalStimulus`，非模拟 AWG）；tinySA 有频谱 + 信号源、无 VNA；`PwmStimulus` 仅留接口（固件 `mcu tim` 仍为 stub）。
 
 ### 12.2 角色与三层配置
@@ -709,7 +719,7 @@ VISA 后端：默认 `ResourceManager()`（系统/NI-VISA；DS1104Z USB 实测�
 
 ### 12.3 数据类型与重试
 
-- 统一数据类型：`Reading`（标量）、`Waveform`（波形）、`ScalarSeries`（标量序列）、`InstrumentInfo`（provenance 唯一真源）。
+- 统一数据类型：`Reading`（标量）、`Waveform`（波形）、`ScalarSeries`（标量序列）、`Spectrum`、`Frame2D`（二维场；热成像默认 `unit=count`）、`InstrumentInfo`（provenance 唯一真源）。
 - **统一重试策略** `RetryPolicy`（默认 3 次 + 退避），对任意设备一致；耗尽抛 `InstrumentError`。过载/未触发等**语义状态**通过 `Reading.flags` 表达，不触发重试、不抛异常。
 
 ### 12.4 采集编排（lab/capture）
@@ -740,9 +750,10 @@ S0 为纯文件层，无数据库；后续可叠加 catalog（jsonl/DuckDB）而
 |------|----------|----------|
 | Rigol DS1104Z | adapter-osc-ds1104 | SCPI 序列 → `drivers/rigol_ds1104.py` |
 | UNI-T UT61E | adapter-dmm-ut61e | ES51922 解析 → 纯 `UT61EDecoder` + `drivers/uni_t_ut61e.py`（修 `low_bat` bug） |
-| TARS（STM32F429-Disc 固件） | tars | CDC shell `mcu gpio` → `drivers/tars_shell.py`（DTR + `tars>` 分帧） |
+| TARS（STM32F429-Disc 固件） | tars | CDC shell `mcu gpio` → `drivers/tars_shell.py`（`SerialShellTransport`，USB 产品名 `TARS Virtual COM Port`，DTR + `tars>` 分帧） |
 | HTOOL SA8 | — | CDC SCPI → `drivers/htool_sa8.py`（频谱 / TG / 标量 VNA） |
 | tinySA | — | USB CDC console（产品名 `tinySA`）→ `drivers/tinysa.py`（`scanraw` 频谱 + `output`/`level`/`freq` 信号源） |
+| Umeko DEC-H | [rpi2040-heimann-htpa32x32d-touchscreen](https://github.com/umeiko/rpi2040-heimann-htpa32x32d-touchscreen) | CDC shell `stream`/`getmat` → `drivers/umeko_dec_h.py`（32×32 raw counts，非 °C） |
 
 ---
 

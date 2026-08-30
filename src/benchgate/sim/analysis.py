@@ -214,7 +214,7 @@ def _integral(values: np.ndarray, axis: np.ndarray) -> float:
         return float("nan")
     y = _series_values(values)
     # numpy 2.0 renamed trapz -> trapezoid; keep both for 1.x installs.
-    trapz = getattr(np, "trapezoid", np.trapz)
+    trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
     return float(trapz(y, axis.astype(float)))
 
 
