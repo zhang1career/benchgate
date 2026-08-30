@@ -316,7 +316,7 @@ KICAD_MCP_PROFILE=analysis   # benchgate 并存时建议 analysis 或 pcb_only
 | 工具 | 策略 |
 |------|------|
 | `sim_run_transient` / `sim_run_ac_analysis` / `sim_run_operating_point` | **不由 MCP 调用**；统一走 `benchgate sim run` |
-| `sim_add_spice_directive` | 仅工程师手工；benchgate 用 sidecar `config/sim_profiles.yaml` |
+| `sim_add_spice_directive` | 仅工程师手工；benchgate 用 `<design>/models/sim_profiles.yaml`（若有）否则 `~/.benchgate/config/sim_profiles.yaml` |
 
 #### 库与采购（benchgate 不涉及）
 
