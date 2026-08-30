@@ -21,3 +21,20 @@ capture:
   edge_settle_s: 0.05
   dmm_readings: 5       # steady-state DMM samples taken during the session
   dmm_settle_s: 0.2
+
+# Optional thermal defaults for `lab thermal capture/alert/watch` and gate evidence.
+# Gate uses only the session named here (session_id and/or session_tag). It does
+# not pick "latest frame2d". Omit this block, or omit both keys, to skip thermal.
+# Numbers below are examples, not built-in thresholds.
+# thermal:
+#   homography_file: ~/.benchgate/config/thermal_map/f3ca8b951477.yaml
+#   baseline_file: ~/.benchgate/config/thermal_baseline/f3ca8b951477.npz
+#   delta_warn: 30
+#   delta_fail: 50
+#   session_id: null
+#   session_tag: thermal-gate
+#   watch_interval_s: 30
+#   apply_calibration: false
+#   frames: 3            # capture / alert burst
+#   baseline_frames: 16  # baseline only; too few makes per-pixel sigma meaningless
+#   reduce: median

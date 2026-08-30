@@ -534,9 +534,21 @@ def build_gate_report(
         except (json.JSONDecodeError, OSError):
             pass
 
+    thermal_cfg: dict[str, Any] = {}
+    if design_dir:
+        from benchgate.lab.thermal import load_thermal_config
+
+        thermal_cfg = load_thermal_config(Path(design_dir) / "models" / "lab.yaml")
+    thermal_evidence = _thermal_evidence(
+        captured_dir,
+        session_id=thermal_cfg.get("session_id"),
+        session_tag=thermal_cfg.get("session_tag"),
+    )
+
     gate_payload = {
         "entries": [asdict(e) for e in entries],
         "comparisons": board_comparisons,
+        "thermal": thermal_evidence,
         "waveform_thresholds": {
             "rmse_warn_v": DEFAULT_RMSE_WARN_V,
             "rmse_fail_v": DEFAULT_RMSE_FAIL_V,
@@ -589,8 +601,78 @@ def build_gate_report(
             "block_sweep_aggregates": (
                 block_sweep_data.get("aggregates") if block_sweep_data else None
             ),
+            "thermal": thermal_evidence,
         },
     )
+
+
+_ALERT_EVIDENCE_KEYS = (
+    "alert_severity_code",
+    "alert_region_count",
+    "t_delta_peak",
+    "t_ref",
+    "alert_baseline_used",
+    "alert_top_ref_distance_mm",
+)
+
+
+def _thermal_evidence(
+    captured_dir: Path,
+    *,
+    session_id: str | None = None,
+    session_tag: str | None = None,
+) -> dict[str, Any] | None:
+    """Evidence for the session named in lab.yaml. No id/tag → None (do not guess)."""
+    sid = str(session_id or "").strip() or None
+    tag = str(session_tag or "").strip() or None
+    if not sid and not tag:
+        return None
+    try:
+        store = LabDataStore(captured_dir)
+    except Exception:
+        return None
+    meta = None
+    if sid:
+        try:
+            meta = store.get_session(sid)
+        except FileNotFoundError:
+            return None
+        if not any(ch.kind == "frame2d" for ch in meta.channels):
+            return None
+    else:
+        matches = [
+            m
+            for m in store.list_sessions(tags=[tag])
+            if any(ch.kind == "frame2d" for ch in m.channels)
+        ]
+        if not matches:
+            return None
+        meta = matches[-1]
+    ch = next((c for c in meta.channels if c.kind == "frame2d"), None)
+    extra = ch.extra if ch else {}
+    unit = str(extra.get("unit", "count"))
+    out: dict[str, Any] = {
+        "session_id": meta.session_id,
+        "unit": unit,
+        "frame_unit_is_degc": float(meta.derived.get("frame_unit_is_degc", 1.0 if unit == "degC" else 0.0)),
+        "fixture_id": extra.get("fixture_id"),
+        "fixture_id_hash": meta.derived.get("fixture_id_hash"),
+        "calibration_kind": extra.get("calibration_kind"),
+        "calibration_slope": extra.get("calibration_slope"),
+        "calibration_offset": extra.get("calibration_offset"),
+        "derived": dict(meta.derived),
+    }
+    for key in _ALERT_EVIDENCE_KEYS:
+        if key in meta.derived:
+            out[key] = meta.derived[key]
+    if meta.path is not None:
+        alert_path = meta.path / "thermal_alert.json"
+        if alert_path.is_file():
+            try:
+                out["alert"] = json.loads(alert_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+    return out
 
 
 def write_gate_report(

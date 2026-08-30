@@ -218,6 +218,64 @@ def _evaluate_limit(rule: RuleDef, ctx: RuleContext) -> tuple[bool, str]:
             return False, f"sweep min {worst:g} below {float(lo):g}"
         return True, f"sweep min {worst:g} >= {float(lo):g}"
 
+    if ltype == "require_unit":
+        expected = str(limit.get("unit") or "")
+        thermal = (ctx.gate_report or {}).get("thermal") or {}
+        actual = thermal.get("unit")
+        flag = thermal.get("frame_unit_is_degc")
+        if actual is None and flag is None:
+            return False, "no thermal unit evidence in gate report (capture a thermal session)"
+        if expected == "degC":
+            is_degc = actual == "degC" or (isinstance(flag, Real) and float(flag) >= 0.5)
+            if not is_degc:
+                return False, "evidence unit is count; spec requires degC (refuse to compare)"
+            slope = thermal.get("calibration_slope")
+            if slope is None:
+                return False, "degC evidence has no slope (calibration not persisted)"
+            return True, "evidence unit is degC"
+        if actual and actual != expected:
+            return False, f"evidence unit {actual!r} != required {expected!r}"
+        return True, f"evidence unit is {actual or expected}"
+
+    if ltype == "thermal_delta_lte":
+        thermal = (ctx.gate_report or {}).get("thermal")
+        if not thermal:
+            return True, "skipped (no thermal evidence)"
+        peak = thermal.get("t_delta_peak")
+        if peak is None:
+            return True, "skipped (no t_delta_peak on thermal evidence)"
+        hi = limit.get("max")
+        if hi is None:
+            return False, "thermal_delta_lte requires max"
+        if float(peak) > float(hi):
+            return False, f"t_delta_peak {float(peak):g} exceeds {float(hi):g}"
+        return True, f"t_delta_peak {float(peak):g} <= {float(hi):g}"
+
+    if ltype == "thermal_alert_clear":
+        thermal = (ctx.gate_report or {}).get("thermal")
+        if not thermal:
+            return True, "skipped (no thermal evidence)"
+        code = thermal.get("alert_severity_code")
+        if code is None:
+            return True, "skipped (no alert_severity_code on thermal evidence)"
+        allow_warn = bool(limit.get("allow_warn", False))
+        level = float(code)
+        if level >= 2.0 or (level >= 1.0 and not allow_warn):
+            return False, f"alert_severity_code {level:g} is not clear"
+        return True, f"alert_severity_code {level:g} is clear"
+
+    if ltype == "fixture_id_match":
+        expected = str(limit.get("fixture_id") or "")
+        thermal = (ctx.gate_report or {}).get("thermal") or {}
+        actual = thermal.get("fixture_id")
+        if not expected:
+            return False, "fixture_id_match requires fixture_id"
+        if not actual:
+            return False, "no fixture_id on latest thermal session"
+        if str(actual) != expected:
+            return False, f"fixture_id {actual!r} != expected {expected!r} (cross-fixture counts)"
+        return True, "fixture_id matches"
+
     return False, f"unknown limit type {ltype!r}"
 
 

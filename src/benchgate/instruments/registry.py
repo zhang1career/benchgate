@@ -10,12 +10,13 @@ Configuration precedence (highest wins):
   capture defaults.
 * CLI/Agent ``--instrument`` / ``--role`` parameters override both.
 
-A *role* (scope/dmm/awg/sa/rfgen/vna) is a logical use mapped to one instrument; a verb in
+A *role* (scope/dmm/awg/sa/rfgen/vna/thermal) is a logical use mapped to one instrument; a verb in
 the CLI selects an instrument by capability, never by device type guesswork.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -31,7 +32,10 @@ from .drivers.htool_sa8 import HtoolSA8
 from .drivers.rigol_ds1104 import DS1104Scope
 from .drivers.tars_shell import TarsStimulus
 from .drivers.tinysa import TinySA
+from .drivers.umeko_dec_h import UmekoDecH
 from .drivers.uni_t_ut61e import UT61EDmm
+
+_LOG = logging.getLogger(__name__)
 
 DRIVER_REGISTRY: dict[str, type[Instrument]] = {
     "rigol_ds1104z": DS1104Scope,
@@ -39,7 +43,13 @@ DRIVER_REGISTRY: dict[str, type[Instrument]] = {
     "tars_shell": TarsStimulus,
     "htool_sa8": HtoolSA8,
     "tinysa": TinySA,
+    "umeko_dec_h": UmekoDecH,
 }
+
+
+def register_driver(name: str, cls: type[Instrument]) -> None:
+    """Register or replace a driver (in-tree or out-of-tree)."""
+    DRIVER_REGISTRY[name] = cls
 
 ROLES = tuple(ROLE_CAPABILITY.keys())
 
@@ -61,6 +71,7 @@ class Bench:
     roles: dict[str, str | None]
     defaults: dict[str, Any] = field(default_factory=dict)
     capture: dict[str, Any] = field(default_factory=dict)
+    thermal: dict[str, Any] = field(default_factory=dict)
 
     def instrument_for_role(self, role: str) -> str | None:
         if role not in ROLE_CAPABILITY:
@@ -113,6 +124,21 @@ class Bench:
             return self.open_role(role)
         raise ConfigError("Specify a role or an instrument")
 
+    def capabilities(self, name: str) -> set[str]:
+        """Roles whose protocol this instrument implements (no I/O)."""
+        if name not in self.instruments:
+            raise ConfigError(f"Unknown instrument {name!r}; known: {sorted(self.instruments)}")
+        cfg = self.instruments[name]
+        driver_cls = DRIVER_REGISTRY.get(cfg.driver)
+        if driver_cls is None:
+            return set()
+        # Probe with a dummy path so USB-product addresses (tinySA) do not require hardware.
+        try:
+            inst = driver_cls(cfg.name, "/dev/null")
+        except TypeError:
+            inst = self.create(name)
+        return {role for role, proto in ROLE_CAPABILITY.items() if isinstance(inst, proto)}
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -137,6 +163,21 @@ def _parse_instruments(raw: dict[str, Any]) -> dict[str, InstrumentConfig]:
             transport=str(spec.get("transport", "")),
             options=dict(spec.get("options") or {}),
         )
+    return out
+
+
+def _known_roles(raw: Mapping[str, Any] | None, *, source: str) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for key, value in (raw or {}).items():
+        if key in ROLE_CAPABILITY:
+            out[key] = value
+        else:
+            _LOG.warning(
+                "Unknown role %r in %s; valid: %s",
+                key,
+                source,
+                sorted(ROLE_CAPABILITY),
+            )
     return out
 
 
@@ -189,19 +230,27 @@ def load_bench(
     defaults = dict(global_raw.get("defaults") or {})
 
     roles: dict[str, str | None] = {r: None for r in ROLE_CAPABILITY}
-    roles.update({k: v for k, v in (global_raw.get("roles") or {}).items() if k in roles})
+    roles.update(_known_roles(global_raw.get("roles"), source=str(instruments_path)))
 
     capture: dict[str, Any] = {}
+    thermal: dict[str, Any] = {}
     if project_lab_path is not None:
         project_raw = _load_yaml(project_lab_path)
         # A project may declare extra local instruments too.
         instruments.update(_parse_instruments(project_raw))
-        roles.update({k: v for k, v in (project_raw.get("roles") or {}).items() if k in roles})
+        roles.update(_known_roles(project_raw.get("roles"), source=str(project_lab_path)))
         capture = dict(project_raw.get("capture") or {})
+        thermal = dict(project_raw.get("thermal") or {})
 
     if overrides:
-        roles.update({k: v for k, v in overrides.items() if k in roles})
+        roles.update(_known_roles(overrides, source="runtime overrides"))
 
     _apply_env_overrides(instruments, roles, os.environ if env is None else env)
 
-    return Bench(instruments=instruments, roles=roles, defaults=defaults, capture=capture)
+    return Bench(
+        instruments=instruments,
+        roles=roles,
+        defaults=defaults,
+        capture=capture,
+        thermal=thermal,
+    )

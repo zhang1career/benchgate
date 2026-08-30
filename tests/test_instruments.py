@@ -11,13 +11,13 @@ from benchgate.instruments import (
     ConfigError,
     Oscilloscope,
     RetryPolicy,
-    ScalarReader,
     TriggerConfig,
     load_bench,
 )
+from benchgate.instruments.capabilities import ROLE_CAPABILITY
 from benchgate.instruments.drivers.rigol_ds1104 import DS1104Scope
-from benchgate.instruments.drivers.tars_shell import TarsStimulus
-from benchgate.instruments.drivers.uni_t_ut61e import EOL, RAW_LEN, UT61EDecoder, UT61EDmm
+from benchgate.instruments.drivers.tars_shell import TarsStimulus, resolve_tars_address
+from benchgate.instruments.drivers.uni_t_ut61e import UT61EDecoder, UT61EDmm
 
 # --- A synthetic but structurally valid ES51922 DC-volts frame ---
 # range_id=2 -> RANGE_V[2]=('220.00','V',0.01); digits 1,2,3,4,5 -> 12345*0.01 = 123.45 V; DC set.
@@ -167,6 +167,13 @@ class _FakeTarsSerial:
 
     def read_until_text(self, marker, *, deadline_s):
         cmd = self.last
+        if "res status" in cmd:
+            return "res: id=pg13 kind=gpio tenant=none active=none lock=0\r\ntars> "
+        if "res grant" in cmd:
+            parts = cmd.split()
+            tenant = parts[-1].strip()
+            pin = parts[-2] if len(parts) >= 2 else "pg13"
+            return f"mcu res grant: id={pin} tenant={tenant}\r\ntars> "
         if "gpio write" in cmd:
             parts = cmd.split()
             return f"mcu gpio write: pin={parts[3]} val={parts[4]}\r\ntars> "
@@ -177,15 +184,92 @@ class _FakeTarsSerial:
         return "TARS shell ready.\r\ntars> "
 
 
+def test_tars_idn_skips_command_echo():
+    assert TarsStimulus._mcu_info_line(
+        "mcu info\r\nmcu: stm32f429i-disc1 (stm32f429/lqfp144)\r\ntars> "
+    ) == "mcu: stm32f429i-disc1 (stm32f429/lqfp144)"
+    assert (
+        TarsStimulus._first_payload_line(
+            "mcu info\r\nmcu: stm32f429i-disc1\r\ntars> ", skip="mcu info"
+        )
+        == "mcu: stm32f429i-disc1"
+    )
+
+
 def test_tars_set_level_and_read():
     t = _FakeTarsSerial()
     tars = TarsStimulus("tars0", "/dev/usbmodem", transport=t, ready_timeout_s=0.1)
     tars.connect()
     tars.set_level("pg13", high=True)
+    assert any("mcu res grant pg13 gpio" in w for w in t.writes)
     assert any("mcu gpio write pg13 1" in w for w in t.writes)
     tars.step_edge("pg13", rising=True)
     assert tars.read_level("pg13") == 1
     tars.disconnect()
+    assert any("mcu res grant pg13 none" in w for w in t.writes)
+
+
+def test_tars_does_not_revoke_preexisting_gpio_grant():
+    t = _FakeTarsSerial()
+    tars = TarsStimulus("tars0", "/dev/usbmodem", transport=t, ready_timeout_s=0.1)
+
+    def already_gpio(marker, *, deadline_s, _orig=t.read_until_text):
+        cmd = t.last
+        if "res status" in cmd:
+            return "res: id=pg13 kind=gpio tenant=gpio active=none lock=0\r\ntars> "
+        return _orig(marker, deadline_s=deadline_s)
+
+    t.read_until_text = already_gpio
+    tars.connect()
+    tars.set_level("pg13", high=True)
+    tars.disconnect()
+    assert not any("mcu res grant pg13 gpio" in w for w in t.writes)
+    assert not any("mcu res grant pg13 none" in w for w in t.writes)
+
+
+class _FakeTarsPort:
+    def __init__(self, device: str, product: str = "TARS Virtual COM Port"):
+        self.device = device
+        self.product = product
+        self.description = product
+
+
+def test_resolve_tars_keeps_existing_path():
+    assert resolve_tars_address("/dev/null") == "/dev/null"
+
+
+def test_resolve_tars_stale_path_falls_back_to_product(monkeypatch):
+    monkeypatch.setattr(
+        "serial.tools.list_ports.comports",
+        lambda: [_FakeTarsPort("/dev/cu.usbmodemNEW")],
+    )
+    assert resolve_tars_address("/dev/cu.usbmodemMISSING") == "/dev/cu.usbmodemNEW"
+
+
+def test_resolve_tars_by_product_name(monkeypatch):
+    monkeypatch.setattr(
+        "serial.tools.list_ports.comports",
+        lambda: [_FakeTarsPort("/dev/cu.usbmodemTARS")],
+    )
+    assert resolve_tars_address("TARS Virtual COM Port") == "/dev/cu.usbmodemTARS"
+    assert resolve_tars_address("TARS") == "/dev/cu.usbmodemTARS"
+
+
+def test_resolve_tars_rejects_unrelated_name():
+    with pytest.raises(Exception, match="Unrecognized TARS address"):
+        resolve_tars_address("tinySA")
+
+
+def test_resolve_tars_ambiguous_ports_raise(monkeypatch):
+    monkeypatch.setattr(
+        "serial.tools.list_ports.comports",
+        lambda: [
+            _FakeTarsPort("/dev/cu.usbmodemA"),
+            _FakeTarsPort("/dev/cu.usbmodemB"),
+        ],
+    )
+    with pytest.raises(Exception, match="Multiple TARS"):
+        resolve_tars_address("TARS")
 
 
 def _write_instruments_yaml(path):
@@ -295,3 +379,42 @@ def test_env_override_by_role_and_name(tmp_path):
     # Serial port override for the DMM by name.
     bench3 = load_bench(cfg, env={"BENCHGATE_INSTRUMENT_DMM_BENCH_ADDRESS": "/dev/ttyUSB9"})
     assert bench3.instruments["dmm_bench"].address == "/dev/ttyUSB9"
+
+
+def test_unknown_role_in_yaml_is_warned(tmp_path, caplog):
+    cfg = tmp_path / "instruments.yaml"
+    _write_instruments_yaml(cfg)
+    text = cfg.read_text(encoding="utf-8")
+    cfg.write_text(text + "\n  thermel: scope_main\n", encoding="utf-8")
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="benchgate.instruments.registry"):
+        bench = load_bench(cfg)
+    assert "Unknown role" in caplog.text
+    assert "thermal" in ROLE_CAPABILITY
+    assert "thermel" not in bench.roles
+    assert "thermal" in bench.roles
+
+
+def test_capabilities_lists_scope_and_not_dmm(tmp_path):
+    cfg = tmp_path / "instruments.yaml"
+    _write_instruments_yaml(cfg)
+    bench = load_bench(cfg)
+    caps = bench.capabilities("scope_main")
+    assert "scope" in caps
+    assert "dmm" not in caps
+
+
+def test_cli_and_dispatch_roles_match_capability_keys():
+    from benchgate.agent import dispatch as dispatch_mod
+    from benchgate.cli import _lab_overrides
+    import argparse
+
+    names = set(ROLE_CAPABILITY)
+    # dispatch helper iterates ROLE_CAPABILITY
+    src = open(dispatch_mod.__file__, encoding="utf-8").read()
+    assert "ROLE_CAPABILITY" in src
+    ns = argparse.Namespace(**{r: None for r in names})
+    assert _lab_overrides(ns) == {}
+    ns.scope = "scope_main"
+    assert _lab_overrides(ns)["scope"] == "scope_main"

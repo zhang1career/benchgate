@@ -543,6 +543,226 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "lab_thermal_capture": {
+        "description": (
+            "Capture a thermal frame (role: thermal; Umeko DEC-H / HTPA32x32). "
+            "Stores a frame2d session; derived hotspot scalars are counts unless calibrated."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "frames": {"type": "integer", "description": "Burst length (default 1)"},
+                "reduce": {"type": "string", "enum": ["max", "mean", "last", "median"]},
+                "threshold": {"type": "number", "description": "Same unit as the frame (count unless calibrated)"},
+                "origin": {"type": "string", "enum": ["top_left", "bottom_left", "center"]},
+                "scale_x": {"type": "number"},
+                "scale_y": {"type": "number"},
+                "coord_unit": {"type": "string"},
+                "flip_x": {"type": "boolean"},
+                "flip_y": {"type": "boolean"},
+                "rotate_quadrants": {"type": "integer"},
+                "warmup_s": {"type": "number"},
+                "distance_mm": {"type": "number"},
+                "ambient_bin": {"type": "string"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "homography": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Four px,py:mmx,mmy pairs for board mapping",
+                },
+                "homography_file": {"type": "string"},
+                "apply_calibration": {
+                    "type": "boolean",
+                    "description": "Apply stored count→degC calibration (error if missing)",
+                },
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_thermal_hotspot": {
+        "description": "Recompute hotspot / threshold stats from a stored frame2d session (no hardware)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "session_id": {"type": "string"},
+                "channel": {"type": "string"},
+                "threshold": {"type": "number"},
+                "origin": {"type": "string"},
+                "scale_x": {"type": "number"},
+                "scale_y": {"type": "number"},
+                "coord_unit": {"type": "string"},
+                "flip_x": {"type": "boolean"},
+                "flip_y": {"type": "boolean"},
+                "rotate_quadrants": {"type": "integer"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_thermal_calibrate": {
+        "description": "Store a two-point count→degC calibration (not applied unless a later capture opts in)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "points": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "count:degC pairs, at least two",
+                },
+                "instrument_idn": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["design_dir", "points"],
+        },
+    },
+    "lab_thermal_map": {
+        "description": "Map a session hotspot through a 4-point homography onto KiCad footprints",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "session_id": {"type": "string"},
+                "homography": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Four px,py:mmx,mmy pairs",
+                },
+                "homography_file": {"type": "string"},
+            },
+            "required": ["design_dir", "session_id"],
+        },
+    },
+    "lab_thermal_register": {
+        "description": (
+            "Detect 4 bright spots in a stored thermal frame and fit a rectangle "
+            "homography (length_mm × width_mm, fixture-local, not KiCad)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "session_id": {"type": "string"},
+                "length_mm": {"type": "number"},
+                "width_mm": {"type": "number"},
+                "threshold": {"type": "number"},
+                "channel": {"type": "string"},
+                "path": {"type": "string"},
+                "fixture_id": {"type": "string"},
+            },
+            "required": ["design_dir", "length_mm", "width_mm"],
+        },
+    },
+    "lab_thermal_verify_refs": {
+        "description": "Verify every PCB footprint reference exists on the KiCad schematic.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_thermal_baseline": {
+        "description": (
+            "Capture an idle-state thermal baseline (median + per-pixel sigma) "
+            "and store it under ~/.benchgate/config/thermal_baseline/<fixture_id>.npz"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "frames": {
+                    "type": "integer",
+                    "description": (
+                        "Burst length (default 16, or lab.yaml thermal.baseline_frames); "
+                        "always median-reduced"
+                    ),
+                },
+                "warmup_s": {"type": "number"},
+                "distance_mm": {"type": "number"},
+                "ambient_bin": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_thermal_alert": {
+        "description": (
+            "Evaluate ΔT vs a fixture baseline (or frame median) and map each "
+            "anomalous region onto KiCad footprint candidates."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "session_id": {"type": "string"},
+                "instrument": {"type": "string"},
+                "frames": {"type": "integer"},
+                "reduce": {"type": "string", "enum": ["max", "mean", "last", "median"]},
+                "channel": {"type": "string"},
+                "baseline_file": {"type": "string"},
+                "delta_warn": {"type": "number"},
+                "delta_fail": {"type": "number"},
+                "k_sigma_warn": {"type": "number"},
+                "k_sigma_fail": {"type": "number"},
+                "min_area_px": {"type": "integer"},
+                "max_regions": {"type": "integer"},
+                "require_baseline": {"type": "boolean"},
+                "warmup_s": {"type": "number"},
+                "distance_mm": {"type": "number"},
+                "ambient_bin": {"type": "string"},
+                "homography": {"type": "array", "items": {"type": "string"}},
+                "homography_file": {"type": "string"},
+                "apply_calibration": {"type": "boolean"},
+                "session_tag": {"type": "string"},
+                "skip_clear_sessions": {
+                    "type": "boolean",
+                    "description": "Write no session when severity is none (watch default)",
+                },
+            },
+            "required": ["design_dir"],
+        },
+    },
+    "lab_thermal_watch": {
+        "description": (
+            "Poll thermal alert on an interval. Writes a new session each tick. "
+            "Does not join KiCad watch_loop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "instrument": {"type": "string"},
+                "interval_s": {"type": "number", "description": "Poll interval (default: lab.yaml watch_interval_s or 30)"},
+                "max_iterations": {
+                    "type": "integer",
+                    "description": "Stop after N polls (0 = until interrupted)",
+                },
+                "quiet": {"type": "boolean"},
+                "frames": {"type": "integer"},
+                "reduce": {"type": "string", "enum": ["max", "mean", "last", "median"]},
+                "baseline_file": {"type": "string"},
+                "delta_warn": {"type": "number"},
+                "delta_fail": {"type": "number"},
+                "k_sigma_warn": {"type": "number"},
+                "k_sigma_fail": {"type": "number"},
+                "require_baseline": {"type": "boolean"},
+                "homography_file": {"type": "string"},
+                "apply_calibration": {"type": "boolean"},
+                "session_tag": {"type": "string"},
+                "skip_clear_sessions": {
+                    "type": "boolean",
+                    "description": "Default true: a clean poll leaves no session behind",
+                },
+            },
+            "required": ["design_dir"],
+        },
+    },
     "watch_loop": {
         "description": (
             "Continuous watch: poll KiCad + blocks.yaml; on change run pipeline → mapping → sim → gate"

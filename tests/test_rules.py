@@ -144,3 +144,117 @@ def test_load_bench_waveform_rules_pack():
     pack = load_rule_pack(_examples_rules("bench-waveform.yaml"))
     assert pack.id == "bench-waveform"
     assert any(r.limit.get("type") == "waveform_rmse_lte" for r in pack.rules)
+
+
+def test_require_unit_fails_on_counts():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"unit": "count", "frame_unit_is_degc": 0.0, "fixture_id": "abc"}}),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and not unit[0].passed
+    assert "count" in unit[0].message
+
+
+def test_require_unit_passes_on_degc():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(
+            gate_report={
+                "thermal": {
+                    "unit": "degC",
+                    "frame_unit_is_degc": 1.0,
+                    "fixture_id": "REPLACE_ME",
+                    "calibration_slope": 0.1,
+                    "calibration_offset": -273.15,
+                }
+            }
+        ),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and unit[0].passed
+    fix = [r for r in ev.results if r.rule_id == "fixture_id_stable"]
+    assert fix and fix[0].passed
+
+
+def test_thermal_delta_lte_pass_fail():
+    pack = load_rule_pack(_examples_rules("thermal-alert.yaml"))
+    passed = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"t_delta_peak": 10.0, "alert_severity_code": 0.0}}),
+        scope="gate",
+    )
+    assert passed.passed
+    failed = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"t_delta_peak": 50.0, "alert_severity_code": 0.0}}),
+        scope="gate",
+    )
+    assert not failed.passed
+    delta = [r for r in failed.results if r.rule_id == "delta_peak_lte"]
+    assert delta and not delta[0].passed
+
+
+def test_thermal_delta_lte_skips_without_evidence():
+    pack = load_rule_pack(_examples_rules("thermal-alert.yaml"))
+    ev = evaluate_rule_packs([pack], RuleContext(gate_report={}), scope="gate")
+    assert ev.passed
+    assert ev.results == []
+
+
+def test_thermal_alert_clear_allow_warn():
+    from benchgate.rules.loader import RuleDef, RulePack
+
+    def pack(allow_warn: bool) -> RulePack:
+        return RulePack(
+            id="t",
+            version=1,
+            source="test",
+            applies_to=["gate"],
+            severity_default="fail",
+            path=Path("."),
+            rules=[
+                RuleDef(
+                    id="clear",
+                    when={},
+                    limit={"type": "thermal_alert_clear", "allow_warn": allow_warn},
+                    severity="fail",
+                    evidence="gate_report.thermal",
+                )
+            ],
+        )
+
+    warn = evaluate_rule_packs(
+        [pack(True)],
+        RuleContext(gate_report={"thermal": {"alert_severity_code": 1.0}}),
+        scope="gate",
+    )
+    assert warn.passed
+    blocked = evaluate_rule_packs(
+        [pack(False)],
+        RuleContext(gate_report={"thermal": {"alert_severity_code": 1.0}}),
+        scope="gate",
+    )
+    assert not blocked.passed
+    fail = evaluate_rule_packs(
+        [pack(True)],
+        RuleContext(gate_report={"thermal": {"alert_severity_code": 2.0}}),
+        scope="gate",
+    )
+    assert not fail.passed
+
+
+def test_require_unit_fails_degc_without_slope():
+    pack = load_rule_pack(_examples_rules("thermal-unit.yaml"))
+    ev = evaluate_rule_packs(
+        [pack],
+        RuleContext(gate_report={"thermal": {"unit": "degC", "frame_unit_is_degc": 1.0, "fixture_id": "abc"}}),
+        scope="gate",
+    )
+    unit = [r for r in ev.results if r.rule_id == "require_degc_for_temp_spec"]
+    assert unit and not unit[0].passed
+    assert "slope" in unit[0].message

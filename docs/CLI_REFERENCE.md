@@ -1,6 +1,6 @@
 # benchgate CLI 参考
 
-权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（39 个）及一行说明。
+权威来源：`src/benchgate/cli.py`。本页列出全部**叶子命令**（44 个）及一行说明。
 
 | 形式 | 文件 | 用途 |
 |------|------|------|
@@ -68,6 +68,14 @@
 | `benchgate lab sa gen` | `lab_sa_gen` | 跟踪源控制（频率 / 功率 / 衰减） |
 | `benchgate lab sa cal` | `lab_sa_cal` | S 参数校准（OPEN / SHORT / LOAD） |
 | `benchgate lab sa sparam` | `lab_sa_sparam` | 采集 S 参数历史曲线 → Session |
+| `benchgate lab thermal capture` | `lab_thermal_capture` | 热成像采帧 → Session（`kind: frame2d`）；默认 unit=`count`；`--apply-calibration` 才写 °C；`--reduce` 含 `median` |
+| `benchgate lab thermal hotspot` | `lab_thermal_hotspot` | 对已存 session 重算热点 / 阈值（无硬件） |
+| `benchgate lab thermal calibrate` | `lab_thermal_calibrate` | 两点 count→°C 标定落盘（须 capture `--apply-calibration` 才应用） |
+| `benchgate lab thermal map` | `lab_thermal_map` | 4 点单应 → 板面 mm → KiCad 候选；板外为 `out_of_board` |
+| `benchgate lab thermal register` | `lab_thermal_register` | 4 个亮点拟合成长×宽矩形单应（夹具坐标，写入 `~/.benchgate/config/thermal_map/`） |
+| `benchgate lab thermal baseline` | `lab_thermal_baseline` | 空闲态 median+sigma 基线 → `~/.benchgate/config/thermal_baseline/` |
+| `benchgate lab thermal alert` | `lab_thermal_alert` | ΔT 相对基线报警；每个区域各自映射到 KiCad 候选 |
+| `benchgate lab thermal watch` | `lab_thermal_watch` | 轮询 alert（独立于 KiCad `watch_loop`）；gate 只用 lab.yaml 里点名的 session |
 
 Agent only：`lab_apply_model`（写 `Sim.*` + manifest，无对应 CLI）。
 

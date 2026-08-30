@@ -1,0 +1,25 @@
+id: thermal-alert
+version: 1
+source: opt-in ΔT / alert gate; not a default pack
+applies_to:
+  - gate
+severity_default: fail
+
+rules:
+  # `max` is an example in the same unit as the stored frame (count or degC).
+  # There is no built-in count-domain threshold.
+  - id: delta_peak_lte
+    when: {}
+    limit:
+      type: thermal_delta_lte
+      max: 40
+    severity: fail
+    evidence: gate_report.thermal.t_delta_peak
+
+  - id: alert_clear
+    when: {}
+    limit:
+      type: thermal_alert_clear
+      allow_warn: false
+    severity: fail
+    evidence: gate_report.thermal.alert_severity_code
