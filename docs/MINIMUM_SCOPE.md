@@ -689,6 +689,7 @@ Transport            Driver (adapter)        Capability (Protocol)     Role
 ─────────            ───────────────         ─────────────────────     ────
 VisaTransport   ──>  DS1104Scope        ──>  Oscilloscope          ──>  scope
 SerialTransport ──>  UT61EDmm           ──>  ScalarReader          ──>  dmm
+Ch9325Hid       ──>  UT372Tach          ──>  ScalarReader          ──>  tach
 SerialTransport ──>  TarsStimulus       ──>  DigitalStimulus       ──>  awg
 SerialScpi      ──>  HtoolSA8           ──>  SpectrumAnalyzer +
                      (HTOOL SA8)             RFSource + VectorAnalyzer ──> sa / rfgen / vna
@@ -700,15 +701,15 @@ SerialShell     ──>  UmekoDecH          ──>  FrameSource +
 
 设计模式：Bridge（传输与驱动解耦，pyvisa/pyserial 懒加载）、Adapter（包装既有设备脚本）、Protocol（按能力拆分，不强制深继承）、Factory + Registry（`DRIVER_REGISTRY` + `load_bench`）。
 
-- **Transport**：`VisaTransport`（SCPI）、`SerialScpiTransport`（CDC SCPI，如 SA8）、`SerialTransport`（被动遥测，如 UT61E、tinySA）、`SerialShellTransport`（CDC 文本壳 + 二进制帧，如 TARS、Umeko DEC-H）。
+- **Transport**：`VisaTransport`（SCPI）、`SerialScpiTransport`（CDC SCPI，如 SA8）、`SerialTransport`（被动遥测，如 UT61E、tinySA）、`SerialShellTransport`（CDC 文本壳 + 二进制帧，如 TARS、Umeko DEC-H）、`Ch9325HidTransport`（CH9325 HID-UART，如 UT372）。
 - **能力按硬件真实情况拆分**：UT61E 只读（无 configure）；TARS 输出固定逻辑电平（`DigitalStimulus`，非模拟 AWG）；tinySA 有频谱 + 信号源、无 VNA；`PwmStimulus` 仅留接口（固件 `mcu tim` 仍为 stub）。
 
 ### 12.2 角色与三层配置
 
-角色（`scope`/`dmm`/`awg`）是逻辑用途，映射到一台具体仪器。绑定优先级（高 → 低）：
+角色（`scope`/`dmm`/`tach`/`awg`）是逻辑用途，映射到一台具体仪器。绑定优先级（高 → 低）：
 
 ```
-CLI/Agent 参数(--scope/--dmm/--awg)  >  项目 <design>/models/lab.yaml  >  全局 ~/.benchgate/config/instruments.yaml
+CLI/Agent 参数(--scope/--dmm/--tach/--awg)  >  项目 <design>/models/lab.yaml  >  全局 ~/.benchgate/config/instruments.yaml
 ```
 
 此外，**环境变量可覆盖仪器地址**（机器相关，与角色绑定正交）：
@@ -751,6 +752,7 @@ S0 为纯文件层，无数据库；后续可叠加 catalog（jsonl/DuckDB）而
 |------|----------|----------|
 | Rigol DS1104Z | adapter-osc-ds1104 | SCPI 序列 → `drivers/rigol_ds1104.py` |
 | UNI-T UT61E | adapter-dmm-ut61e | ES51922 解析 → 纯 `UT61EDecoder` + `drivers/uni_t_ut61e.py`（修 `low_bat` bug） |
+| UNI-T UT372 | sigrok / libsigrok ut372 | CH9325 HID-UART + LCD 段码 → `hid_ch9325.py` + `drivers/uni_t_ut372.py` |
 | TARS（STM32F429-Disc 固件） | tars | CDC shell `mcu gpio` → `drivers/tars_shell.py`（`SerialShellTransport`，USB 产品名 `TARS Virtual COM Port`，DTR + `tars>` 分帧） |
 | HTOOL SA8 | — | CDC SCPI → `drivers/htool_sa8.py`（频谱 / TG / 标量 VNA） |
 | tinySA | — | USB CDC console（产品名 `tinySA`）→ `drivers/tinysa.py`（`scanraw` 频谱 + `output`/`level`/`freq` 信号源） |

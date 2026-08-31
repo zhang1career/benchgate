@@ -5,6 +5,7 @@ deep inheritance tree. A driver implements the subset it supports:
 
 * DS1104Z  -> Oscilloscope
 * UT61E    -> ScalarReader (read-only telemetry; not configurable)
+* UT372    -> ScalarReader (tachometer RPM / count; mode set on the device)
 * TARS     -> DigitalStimulus (3.3 V logic levels; amplitude is not settable)
 * HTOOL SA8 -> SpectrumAnalyzer + RFSource + VectorAnalyzer
 * tinySA   -> SpectrumAnalyzer + RFSource (no VNA)
@@ -166,6 +167,7 @@ class RadiometricSensor(Protocol):
 ROLE_CAPABILITY: dict[str, type] = {
     "scope": Oscilloscope,
     "dmm": ScalarReader,
+    "tach": ScalarReader,
     "awg": DigitalStimulus,
     "sa": SpectrumAnalyzer,
     "rfgen": RFSource,

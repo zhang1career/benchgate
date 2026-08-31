@@ -18,6 +18,8 @@ class QuantityKind(str, Enum):
     FREQUENCY = "frequency"
     PERCENT = "percent"
     TEMPERATURE = "temperature"
+    RPM = "rpm"
+    COUNT = "count"
     UNKNOWN = "unknown"
 
 

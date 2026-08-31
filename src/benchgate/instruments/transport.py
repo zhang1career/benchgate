@@ -6,6 +6,7 @@ Transports:
 * ``SerialScpiTransport``  — SCPI framing over pyserial (HTOOL-SA8 CDC-ACM).
 * ``SerialTransport``      — raw serial; passive telemetry DMMs.
 * ``SerialShellTransport`` — CDC text shell + optional binary frames (TARS, Umeko DEC-H).
+* ``Ch9325HidTransport``   — UART over WCH CH9325 / HE2325U HID (``hid_ch9325``).
 
 Third-party libraries are imported lazily so the package imports without the
 optional ``[lab]`` extra installed.

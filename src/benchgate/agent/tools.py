@@ -121,7 +121,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "lab_read": {
-        "description": "Read scalar value(s) from a measurement instrument (default role: dmm)",
+        "description": "Read scalar value(s) from a measurement instrument (default role: dmm; tachometer: tach)",
         "parameters": {
             "type": "object",
             "properties": {

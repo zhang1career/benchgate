@@ -10,7 +10,7 @@ Configuration precedence (highest wins):
   capture defaults.
 * CLI/Agent ``--instrument`` / ``--role`` parameters override both.
 
-A *role* (scope/dmm/awg/sa/rfgen/vna/thermal) is a logical use mapped to one instrument; a verb in
+A *role* (scope/dmm/tach/awg/sa/rfgen/vna/thermal) is a logical use mapped to one instrument; a verb in
 the CLI selects an instrument by capability, never by device type guesswork.
 """
 
@@ -34,12 +34,14 @@ from .drivers.tars_shell import TarsStimulus
 from .drivers.tinysa import TinySA
 from .drivers.umeko_dec_h import UmekoDecH
 from .drivers.uni_t_ut61e import UT61EDmm
+from .drivers.uni_t_ut372 import UT372Tach
 
 _LOG = logging.getLogger(__name__)
 
 DRIVER_REGISTRY: dict[str, type[Instrument]] = {
     "rigol_ds1104z": DS1104Scope,
     "uni_t_ut61e": UT61EDmm,
+    "uni_t_ut372": UT372Tach,
     "tars_shell": TarsStimulus,
     "htool_sa8": HtoolSA8,
     "tinysa": TinySA,

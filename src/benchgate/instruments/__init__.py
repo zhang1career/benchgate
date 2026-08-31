@@ -36,6 +36,7 @@ from .registry import (
     load_bench,
     register_driver,
 )
+from .hid_ch9325 import Ch9325HidTransport
 from .transport import ScpiChannel, SerialScpiTransport, SerialShellTransport, SerialTransport, VisaTransport
 from .types import (
     DEFAULT_RETRY,
@@ -75,6 +76,7 @@ __all__ = [
     "SerialScpiTransport",
     "SerialTransport",
     "SerialShellTransport",
+    "Ch9325HidTransport",
     "InstrumentError",
     "InstrumentConnectionError",
     "CapabilityError",

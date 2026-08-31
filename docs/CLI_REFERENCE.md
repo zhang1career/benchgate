@@ -54,7 +54,7 @@
 | 命令 | Agent 工具 | 说明 |
 |------|------------|------|
 | `benchgate lab list` | `lab_list` | 列出仪器与有效角色绑定 |
-| `benchgate lab read` | `lab_read` | 标量读数（默认 role `dmm`）；`--continuous` 流式输出 |
+| `benchgate lab read` | `lab_read` | 标量读数（默认 role `dmm`；转速表 `--role tach`）；`--continuous` 流式输出 |
 | `benchgate lab capture` | `lab_capture_waveform` | scope 采波形 → Session；`--tags`；`--out` 导出 CSV |
 | `benchgate lab characterize` | `lab_capture` | 阶跃采波形 + 拟合 → subckt + manifest；默认 tag `characterize`；默认重跑 sim+gate |
 | `benchgate lab compare` | `lab_compare_waveforms` | 单 session 波形 vs `reports/sim/*.csv`（RMSE、correlation） |

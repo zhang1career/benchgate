@@ -2,7 +2,7 @@
 # (or set BENCHGATE_HOME to relocate the config root).
 #
 # Precedence for role bindings (highest wins):
-#   CLI/Agent --scope/--dmm/--awg/--sa/--rfgen/--vna/--thermal  >  <design>/models/lab.yaml  >  this file
+#   CLI/Agent --scope/--dmm/--tach/--awg/--sa/--rfgen/--vna/--thermal  >  <design>/models/lab.yaml  >  this file
 #
 # Address overrides (machine-specific, orthogonal to role bindings):
 #   BENCHGATE_INSTRUMENT_<NAME>_ADDRESS
@@ -67,9 +67,19 @@ instruments:
       timeout_s: 3.0
       assert_dtr: true
 
+  ut372_bench:
+    driver: uni_t_ut372
+    transport: hid_ch9325
+    # WCH CH9325 HID (needs libhidapi: brew install hidapi). Or "auto".
+    address: "1a86:e008"
+    options:
+      baud: 2400
+      timeout_s: 8.0
+
 roles:
   scope: scope_main
   dmm: dmm_bench
+  tach: ut372_bench      # UNI-T UT372 laser tachometer (RPM / count)
   awg: null              # set to tars_disc when using GPIO step stimulus
   sa: sa8_bench          # or tinysa_bench
   rfgen: sa8_bench       # or tinysa_bench
