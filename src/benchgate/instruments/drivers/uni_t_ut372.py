@@ -4,6 +4,10 @@ The UT372 streams LCD segment packets over a WCH CH9325 HID-UART (2400 8N1).
 Mode (RPM / COUNT) and MAX/MIN/AVG/HOLD are set on the front panel — there is
 no command channel — so this driver implements only ``ScalarReader``.
 
+``program_baud`` sends the CH9325 baud feature report like sigrok does. It can
+be disabled for chips whose ``SetReport`` stalls; the UART is already 2400 8N1
+either way.
+
 Packet format (sigrok / libsigrok ``ut372.c``): 27 ASCII bytes ending in CR LF.
 Pairs of characters decode to 7-segment bitfields; the first character is
 ignored. The parser is a pure ``UT372Decoder`` so it can be tested without HID.
@@ -162,6 +166,7 @@ class UT372Tach(Instrument):
         baud: int = DEFAULT_BAUD,
         timeout_s: float = 8.0,
         exclusive: bool = True,
+        program_baud: bool = True,
         transport: Ch9325HidTransport | None = None,
     ) -> None:
         super().__init__(name, address, retry=retry)
@@ -171,6 +176,7 @@ class UT372Tach(Instrument):
             baud=baud,
             timeout_s=timeout_s,
             exclusive=exclusive,
+            program_baud=program_baud,
         )
         self._decoder = UT372Decoder()
 
@@ -194,6 +200,7 @@ class UT372Tach(Instrument):
         """Assemble and decode one LCD frame within a single timeout budget."""
         deadline = time.monotonic() + self._timeout_s
         acc = bytearray()
+        generation = getattr(self._t, "generation", 0)
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             piece = self._t.read_until(
@@ -201,6 +208,9 @@ class UT372Tach(Instrument):
                 max_bytes=PACKET_LEN + 8,
                 timeout_s=remaining,
             )
+            if getattr(self._t, "generation", 0) != generation:
+                generation = self._t.generation
+                acc.clear()
             if piece:
                 acc.extend(piece)
             parsed = self._frame_from_buffer(acc)
@@ -208,8 +218,9 @@ class UT372Tach(Instrument):
                 return parsed
             if not piece and not acc:
                 raise TimeoutInstrumentError(
-                    "no UT372 UART data (CH9325 HID is up). Power on the meter "
-                    "and set setup USB=1 (HOLD to enter setup; USB is off after every restart)."
+                    "no UT372 UART data while the HID handle stayed up. LCD RPM "
+                    "is independent of USB telemetry — enable setup USB=1 (HOLD). "
+                    "If USB is already on, Darwin dropped the interrupt reports."
                 )
         raise DecodeError(f"could not sync UT372 frame ({len(acc)} bytes)")
 

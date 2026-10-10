@@ -755,7 +755,7 @@ S0 为纯文件层，无数据库；后续可叠加 catalog（jsonl/DuckDB）而
 | UNI-T UT372 | sigrok / libsigrok ut372 | CH9325 HID-UART + LCD 段码 → `hid_ch9325.py` + `drivers/uni_t_ut372.py` |
 | TARS（STM32F429-Disc 固件） | tars | CDC shell `mcu gpio` → `drivers/tars_shell.py`（`SerialShellTransport`，USB 产品名 `TARS Virtual COM Port`，DTR + `tars>` 分帧） |
 | HTOOL SA8 | — | CDC SCPI → `drivers/htool_sa8.py`（频谱 / TG / 标量 VNA） |
-| tinySA | — | USB CDC console（产品名 `tinySA`）→ `drivers/tinysa.py`（`scanraw` 频谱 + `output`/`level`/`freq` 信号源） |
+| tinySA | — | USB CDC console（产品名 `tinySA`）→ `drivers/tinysa.py`（`scanraw` 频谱 + `output`/`level`/`sweep cw` 信号源） |
 | Umeko DEC-H | [rpi2040-heimann-htpa32x32d-touchscreen](https://github.com/umeiko/rpi2040-heimann-htpa32x32d-touchscreen) | CDC shell `stream`/`getmat` → `drivers/umeko_dec_h.py`（32×32 raw counts，非 °C） |
 
 ---

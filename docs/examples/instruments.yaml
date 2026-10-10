@@ -75,6 +75,7 @@ instruments:
     options:
       baud: 2400
       timeout_s: 8.0
+      # program_baud: false   # skip the CH9325 SetReport if it stalls
 
 roles:
   scope: scope_main

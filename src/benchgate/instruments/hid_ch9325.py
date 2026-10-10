@@ -16,6 +16,13 @@ Feature report programs the UART. hidapi wants a leading report-ID byte
 The OS HID stack owns the interface, so this transport talks through hidapi
 (not libusb). The shared library is loaded via ctypes; the optional ``hid``
 Python package is used when already importable.
+
+macOS (DriverKit ``AppleUserUSBHostHIDDevice``) polls the interrupt IN pipe as
+soon as the chip enumerates. Observed with a UT372: the pipe answers for
+~0.25 s, then returns transaction errors; after 9 failed polls macOS resets the
+device, which re-enumerates under a new path about once a second. A dead
+handle therefore means "reopen the next enumeration and reprogram the UART
+immediately", not "unplugged".
 """
 
 from __future__ import annotations
@@ -52,6 +59,7 @@ MAX_PAYLOAD = 7
 DEFAULT_BAUD = 2400
 DEFAULT_DATA_BITS = 8
 DUMMY_ADDRESSES = frozenset({"/dev/null", "COM0", "none"})
+REATTACH_TIMEOUT_S = 2.0
 
 
 class HidDevice(Protocol):
@@ -60,6 +68,25 @@ class HidDevice(Protocol):
     def read(self, size: int, timeout_ms: int) -> bytes: ...
 
     def close(self) -> None: ...
+
+
+def hid_read_error_is_idle(err: str) -> bool:
+    """Whether a hidapi error string means 'no report yet', not a dead handle.
+
+    hidapi 0.15 on Darwin returns ``0`` from ``hid_read_timeout`` on a quiet
+    pipe. ``-1`` plus ``device disconnected`` / ``error waiting for more data``
+    means the input thread has died and must not be treated as idle.
+    """
+    if not err:
+        return True
+    folded = err.casefold()
+    if "disconnected" in folded or "thread shutdown" in folded:
+        return False
+    if "error waiting for more data" in folded:
+        return False
+    if folded == "success":
+        return True
+    return "IOHIDDeviceSetReport" in err
 
 
 def unwrap_ch9325_report(data: bytes) -> bytes:
@@ -169,11 +196,7 @@ class _CtypesHidDevice:
         if n == 0:
             return b""
         if n < 0:
-            # Darwin hidapi sometimes returns -1 with "Success" on idle timeout.
-            err = self._error()
-            if not err or err.casefold() == "success":
-                return b""
-            raise TransientInstrumentError(f"HID read failed: {err}")
+            raise _hid_read_failure(self._read_error())
         return bytes(buf[:n])
 
     def close(self) -> None:
@@ -188,11 +211,30 @@ class _CtypesHidDevice:
             return ""
         return str(msg or "")
 
+    def _read_error(self) -> str:
+        fn = getattr(self._lib, "hid_read_error", None)
+        if fn is not None:
+            try:
+                msg = fn(self._handle)
+                if msg:
+                    return str(msg)
+            except Exception:
+                pass
+        return self._error()
+
+
+def _hid_read_failure(err: str) -> Exception:
+    text = err or "HID read failed"
+    if hid_read_error_is_idle(text):
+        return TransientInstrumentError(f"HID read failed: {text}")
+    return InstrumentConnectionError(f"HID read failed: {text}")
+
 
 class _CtypesHidApi:
     """Minimal hidapi binding (enumerate / open / feature / read)."""
 
     def __init__(self, exclusive: bool = True) -> None:
+        self.exclusive = exclusive
         self._lib = self._load()
         self._lib.hid_init.restype = c_int
         self._lib.hid_enumerate.argtypes = [c_ushort, c_ushort]
@@ -209,12 +251,19 @@ class _CtypesHidApi:
         self._lib.hid_send_feature_report.restype = c_int
         self._lib.hid_error.argtypes = [c_void_p]
         self._lib.hid_error.restype = c_wchar_p
+        read_err = getattr(self._lib, "hid_read_error", None)
+        if read_err is not None:
+            read_err.argtypes = [c_void_p]
+            read_err.restype = c_wchar_p
         if self._lib.hid_init() != 0:
             raise InstrumentConnectionError("hid_init failed")
+        self._apply_exclusive()
+
+    def _apply_exclusive(self) -> None:
         setter = getattr(self._lib, "hid_darwin_set_open_exclusive", None)
         if setter is not None:
             setter.argtypes = [c_int]
-            setter(1 if exclusive else 0)
+            setter(1 if self.exclusive else 0)
 
     @staticmethod
     def _load() -> ctypes.CDLL:
@@ -253,15 +302,10 @@ class _CtypesHidApi:
         return out
 
     def open_path(self, path: bytes) -> _CtypesHidDevice:
+        self._apply_exclusive()
         handle = self._lib.hid_open_path(path)
         if not handle:
             raise InstrumentConnectionError(f"HID open failed for {path!r}")
-        return _CtypesHidDevice(self._lib, handle)
-
-    def open_vid_pid(self, vid: int, pid: int) -> _CtypesHidDevice:
-        handle = self._lib.hid_open(vid, pid, None)
-        if not handle:
-            raise InstrumentConnectionError(f"HID open failed for {vid:04x}:{pid:04x}")
         return _CtypesHidDevice(self._lib, handle)
 
 
@@ -311,11 +355,6 @@ class _PyHidApi:
         device.open_path(path)
         return _PyHidDevice(device)
 
-    def open_vid_pid(self, vid: int, pid: int) -> _PyHidDevice:
-        device = self._hid.device()  # type: ignore[attr-defined]
-        device.open(vid, pid)
-        return _PyHidDevice(device)
-
 
 _HID_BACKEND = None
 
@@ -328,6 +367,11 @@ def _open_hid_backend(exclusive: bool = True):
     """
     global _HID_BACKEND
     if _HID_BACKEND is not None:
+        if hasattr(_HID_BACKEND, "exclusive"):
+            _HID_BACKEND.exclusive = exclusive
+            apply_excl = getattr(_HID_BACKEND, "_apply_exclusive", None)
+            if callable(apply_excl):
+                apply_excl()
         return _HID_BACKEND
     try:
         import hid as hid_mod  # type: ignore[import-not-found]
@@ -368,7 +412,9 @@ class Ch9325HidTransport:
         self._backend = backend
         self._injected = device
         self._dev: HidDevice | None = None
+        self._path: bytes | None = None
         self._buf = bytearray()
+        self.generation = 0
 
     @property
     def is_open(self) -> bool:
@@ -379,7 +425,8 @@ class Ch9325HidTransport:
             return
         if self._injected is not None:
             self._dev = self._injected
-            self._configure()
+            if self.program_baud:
+                self._configure()
             return
         if self.address.strip() in DUMMY_ADDRESSES:
             raise InstrumentConnectionError(f"Refusing to open dummy address {self.address!r}")
@@ -396,7 +443,6 @@ class Ch9325HidTransport:
                 last = exc
         if self._dev is None:
             raise last or InstrumentConnectionError("HID open failed")
-        time.sleep(0.15)
         if self.program_baud:
             self._configure()
 
@@ -407,6 +453,7 @@ class Ch9325HidTransport:
             except Exception:
                 pass
         self._dev = None
+        self._path = None
         self._buf.clear()
 
     def flush_input(self) -> None:
@@ -463,17 +510,48 @@ class Ch9325HidTransport:
         try:
             self._dev.send_feature_report(report)
         except InstrumentConnectionError:
-            # Do not reopen: extra exclusive seizes reset the CH9325 on macOS.
+            # Fails while macOS is already retrying a dead IN pipe; the next
+            # enumeration gets a fresh attempt in _reattach().
             pass
         time.sleep(0.05)
 
     def _open_device(self, backend) -> HidDevice:
-        vid, pid, path = parse_ch9325_address(self.address)
-        if path:
-            return backend.open_path(path)
-        if vid is not None and pid is not None and hasattr(backend, "open_vid_pid"):
-            return backend.open_vid_pid(vid, pid)
-        return backend.open_path(self._resolve_path(backend))
+        path = self._resolve_path(backend)
+        dev = backend.open_path(path)
+        self._path = path
+        return dev
+
+    def _reattach(self) -> None:
+        old = self._path
+        try:
+            self._dev.close()
+        except Exception:
+            pass
+        self._dev = None
+        # A partial frame from the previous enumeration must not be spliced
+        # onto the next one.
+        self._buf.clear()
+        path = self._fresh_path(old, REATTACH_TIMEOUT_S)
+        if path is None:
+            raise InstrumentConnectionError("CH9325 HID device disappeared and did not re-enumerate")
+        self._dev = self._backend.open_path(path)
+        self._path = path
+        self.generation += 1
+        if self.program_baud:
+            self._configure()
+
+    def _fresh_path(self, old: bytes | None, timeout_s: float) -> bytes | None:
+        vid, pid, _ = parse_ch9325_address(self.address)
+        pairs = ((vid, pid),) if vid is not None and pid is not None else KNOWN_VID_PIDS
+        deadline = time.monotonic() + timeout_s
+        while True:
+            for v, p in pairs:
+                for row in self._backend.enumerate(v, p):
+                    if row["path"] and row["path"] != old:
+                        return row["path"]
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.005)
 
     def _resolve_path(self, backend) -> bytes:
         vid, pid, path = parse_ch9325_address(self.address)
@@ -507,11 +585,13 @@ class Ch9325HidTransport:
     def _read_hid(self, timeout_ms: int) -> bytes:
         if self._dev is None:
             raise InstrumentConnectionError("CH9325 HID device is not open")
-        started = time.monotonic()
-        raw = self._dev.read(HID_REPORT_LEN, timeout_ms)
+        try:
+            raw = self._dev.read(HID_REPORT_LEN, timeout_ms)
+        except InstrumentConnectionError:
+            if self._injected is not None or self._backend is None:
+                raise
+            self._reattach()
+            return b""
         if not raw:
-            # Immediate empty on Darwin is a dead or idle handle, not a timeout.
-            if time.monotonic() - started < 0.03:
-                time.sleep(0.02)
             return b""
         return unwrap_ch9325_report(raw)

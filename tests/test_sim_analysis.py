@@ -176,6 +176,29 @@ def test_ac_bandwidth_and_peaking_metrics(tmp_path: Path) -> None:
     # and bw_3db without an axis cannot be computed rather than being guessed
     assert np.isnan(_compute_metric(sig["v(lp)"], "bw_3db"))
 
+    # flat + 0° is resistive across the whole sweep
+    assert np.isclose(
+        _compute_metric(sig["v(flat)"], "resistive_bw", axis=axis),
+        float(axis[-1]),
+        rtol=1e-9,
+    )
+    # first-order LP: |ph| hits 10° at f ≈ 1000*tan(10°) ≈ 176 Hz
+    rbw = _compute_metric(sig["v(lp)"], "resistive_bw", axis=axis)
+    assert 100.0 < rbw < 300.0
+
+    # Integrator T = 1000/(j f): UGF=1 kHz, phase=-90°, PM=90°.
+    t_int = 1000.0 / (1j * freq)
+    assert np.isclose(_compute_metric(t_int, "unity_gain_freq", axis=freq), 1000.0, rtol=2e-3)
+    assert np.isclose(_compute_metric(t_int, "phase_margin", axis=freq), 90.0, atol=0.2)
+    # no -180° crossing → infinite gain margin
+    assert _compute_metric(t_int, "gain_margin_db", axis=freq) == float("inf")
+
+    # Extra pole at 10 kHz: UGF still near 1 kHz, PM ≈ 90 - arctan(0.1) ≈ 84.3°.
+    t_lag = t_int / (1.0 + 1j * freq / 10000.0)
+    pm = _compute_metric(t_lag, "phase_margin", axis=freq)
+    assert 83.0 < pm < 86.0
+    assert np.isclose(_compute_metric(t_lag, "unity_gain_freq", axis=freq), 1000.0, rtol=0.05)
+
 
 def test_ac_time_domain_metric_falls_back_to_magnitude(tmp_path: Path) -> None:
     from benchgate.sim.analysis import _compute_metric

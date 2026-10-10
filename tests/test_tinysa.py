@@ -65,6 +65,7 @@ class _FakeSerial:
         self.writes: list[str] = []
         self._queue: list[bytes] = []
         self._points = 8
+        self._sweep: tuple[float, float, int] = (1e6, 30e6, 290)
 
     def open(self) -> None:
         self.is_open = True
@@ -92,12 +93,17 @@ class _FakeSerial:
             )
         elif cmd == "mode low input":
             self._queue.append(b"mode low input\r\nch>")
+        elif cmd.startswith("sweep cw "):
+            hz = float(cmd.split()[2])
+            self._sweep = (hz, hz, 290)
+            self._queue.append((cmd + "\r\nch>").encode())
         elif cmd.startswith("sweep center") or cmd.startswith("sweep span"):
             self._queue.append((cmd + "\r\nch>").encode())
         elif cmd.startswith("sweep start") or cmd.startswith("sweep stop"):
             self._queue.append((cmd + "\r\nch>").encode())
         elif cmd == "sweep":
-            self._queue.append(b"sweep\r\n1000000 30000000 290\r\nch>")
+            start, stop, pts = self._sweep
+            self._queue.append(f"sweep\r\n{start:.0f} {stop:.0f} {pts}\r\nch>".encode())
         elif cmd.startswith("attenuate") or cmd.startswith("trace "):
             self._queue.append((cmd + "\r\nch>").encode())
         elif cmd == "pause" or cmd == "resume":
@@ -152,6 +158,8 @@ def test_tinysa_capabilities_and_sweep():
     sa.set_generator_frequency_mhz(10.0)
     sa.set_generator_power_dbm(-30)
     sa.set_generator_enabled(True)
+    assert "sweep cw 10000000" in t.writes
+    assert not any(w.startswith("freq ") for w in t.writes)
     assert "mode low output" in t.writes
     assert "output on" in t.writes
     assert sa.query_generator_enabled() is True

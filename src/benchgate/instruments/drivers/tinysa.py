@@ -12,6 +12,8 @@ Wire protocol:
   * Spectrum capture uses ``scanraw`` binary framing:
     ``{`` + (``x`` + uint16_le)*N + ``}`` → dBm = raw/32 - offset
     (offset 128 for classic tinySA, 174 for Ultra).
+  * RF source CW is ``sweep cw {Hz}``. ``freq`` is the SA measurement
+    center, not the generator.
 """
 
 from __future__ import annotations
@@ -338,9 +340,15 @@ class TinySA(Instrument):
         run_with_retry(self.retry, _do, op="tinysa.gen_enable")
 
     def set_generator_frequency_mhz(self, freq_mhz: float) -> None:
+        # Wiki: `freq` pauses the sweep and sets the *measurement* center.
+        # CW output (and zero-span input) is `sweep cw`, which applies in
+        # both input and output modes. `freq` leaves LOW output at the
+        # device default (typically 10 MHz).
         hz = _mhz_to_hz(freq_mhz)
-        run_with_retry(self.retry, lambda: self._send(f"freq {hz}"), op="tinysa.gen_freq")
-        self._gen_freq_mhz = float(freq_mhz)
+        if hz <= 0:
+            raise InstrumentError(f"generator frequency must be > 0 Hz, got {freq_mhz} MHz")
+        run_with_retry(self.retry, lambda: self._send(f"sweep cw {hz}"), op="tinysa.gen_freq")
+        self._gen_freq_mhz = hz / 1e6
 
     def set_generator_power_dbm(self, power_dbm: int) -> None:
         # Classic low-output range is roughly -76..-6 dBm (device clamps).
@@ -357,6 +365,10 @@ class TinySA(Instrument):
         return self._gen_enabled
 
     def query_generator_frequency_mhz(self) -> float:
+        start, stop, _ = parse_sweep_status(self._send("sweep"))
+        if start > 0 and abs(start - stop) <= max(1.0, start * 1e-9):
+            self._gen_freq_mhz = start / 1e6
+            return self._gen_freq_mhz
         if self._gen_freq_mhz is None:
             raise InstrumentError("generator frequency has not been set yet")
         return self._gen_freq_mhz

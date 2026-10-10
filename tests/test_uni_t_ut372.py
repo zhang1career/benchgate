@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import benchgate.instruments.hid_ch9325 as hid_ch9325
 from benchgate.instruments.capabilities import ROLE_CAPABILITY
 from benchgate.instruments.drivers.uni_t_ut372 import (
     PACKET_LEN,
@@ -15,6 +16,7 @@ from benchgate.instruments.errors import DecodeError, InstrumentConnectionError,
 from benchgate.instruments.hid_ch9325 import (
     Ch9325HidTransport,
     ch9325_feature_report,
+    hid_read_error_is_idle,
     parse_ch9325_address,
     unwrap_ch9325_report,
 )
@@ -242,6 +244,12 @@ def test_ut372_implements_tach_role():
     inst.disconnect()
 
 
+def test_ut372_transport_defaults():
+    inst = UT372Tach("probe", "/dev/null")
+    assert inst._t.program_baud is True
+    assert inst._t.exclusive is True
+
+
 def test_unwrap_ch9325_empty_and_payload():
     assert unwrap_ch9325_report(b"\xf0" + b"\x00" * 7) == b""
     assert unwrap_ch9325_report(b"\xf3ABC\x00\x00\x00\x00") == b"ABC"
@@ -357,6 +365,21 @@ def test_keepalives_do_not_reconnect():
     transport.close()
 
 
+def test_hid_read_error_treats_stale_setreport_as_idle():
+    assert hid_read_error_is_idle("")
+    assert hid_read_error_is_idle("Success")
+    assert hid_read_error_is_idle(
+        "IOHIDDeviceSetReport failed: (0xE0005000) unknown error code"
+    )
+    assert hid_read_error_is_idle(
+        "IOHIDDeviceSetReport failed: (0xE00002D8) (iokit/common) not ready"
+    )
+    assert not hid_read_error_is_idle("Device is disconnected")
+    assert not hid_read_error_is_idle("hid_read_timeout: device disconnected")
+    assert not hid_read_error_is_idle("hid_read_timeout: error waiting for more data")
+    assert not hid_read_error_is_idle("hid_read_timeout: thread shutdown")
+
+
 def test_configure_tolerates_feature_report_failure():
     class _NoFeature(_FakeHidDev):
         def send_feature_report(self, data: bytes) -> int:
@@ -368,3 +391,88 @@ def test_configure_tolerates_feature_report_failure():
     frame = transport.read_until(b"\r\n", max_bytes=27)
     assert frame == RPM_123_45
     transport.close()
+
+
+def test_program_baud_false_skips_feature_report():
+    class _ForbidFeature(_FakeHidDev):
+        def send_feature_report(self, data: bytes) -> int:
+            raise AssertionError("feature report sent with program_baud=False")
+
+    hid = _ForbidFeature(RPM_123_45)
+    transport = Ch9325HidTransport("auto", device=hid, program_baud=False, timeout_s=1.0)
+    tach = UT372Tach("tach0", "auto", transport=transport, program_baud=False)
+    tach.connect()
+    reading = tach.read()
+    assert reading.value == pytest.approx(123.45)
+    assert hid.feature is None
+    tach.disconnect()
+
+
+class _ResettingHid(_FakeHidDev):
+    """Serves ``uart`` once, then dies like a handle after a macOS device reset."""
+
+    def __init__(self, uart: bytes, backend: "_ResettingBackend"):
+        super().__init__(uart)
+        self._backend = backend
+
+    def read(self, size: int, timeout_ms: int) -> bytes:
+        if self._i >= len(self._uart):
+            self._backend.resets += 1
+            raise InstrumentConnectionError("HID read failed: hid_read_timeout: error waiting for more data")
+        n = min(7, len(self._uart) - self._i)
+        chunk = self._uart[self._i : self._i + n]
+        self._i += n
+        return bytes([0xF0 | n]) + chunk + b"\x00" * (7 - n)
+
+
+class _ResettingBackend:
+    """One CH9325 that re-enumerates under a new path after each reset."""
+
+    def __init__(self, sessions: list[bytes]):
+        self.devices = [_ResettingHid(uart, self) for uart in sessions]
+        self.resets = 0
+        self.opened: list[bytes] = []
+
+    def enumerate(self, vid: int, pid: int) -> list[dict]:
+        if self.resets >= len(self.devices):
+            return []
+        return [{"path": b"DevSrvsID:%d" % (100 + self.resets), "vendor_id": vid, "product_id": pid}]
+
+    def open_path(self, path: bytes) -> _ResettingHid:
+        self.opened.append(path)
+        return self.devices[self.resets]
+
+
+def test_transport_reattaches_and_reprograms_after_reset():
+    backend = _ResettingBackend([b"005>656", RPM_123_45])
+    transport = Ch9325HidTransport("1a86:e008", backend=backend, timeout_s=1.0)
+    transport.open()
+    frame = transport.read_until(b"\r\n", max_bytes=PACKET_LEN + 8)
+    assert frame == RPM_123_45
+    assert backend.opened == [b"DevSrvsID:100", b"DevSrvsID:101"]
+    assert all(dev.feature == ch9325_feature_report(2400, 8) for dev in backend.devices)
+    assert transport.generation == 1
+    transport.close()
+
+
+def test_driver_drops_partial_frame_across_reset():
+    # Session 1's head (88888 rpm digits) spliced onto session 2's tail would
+    # decode as a valid but wrong 88888 rpm frame.
+    other = _packet(digits=[0x7F] * 5, flags2=0x01)
+    backend = _ResettingBackend([b"x" * 23 + other[:12], RPM_123_45[12:] + RPM_123_45])
+    transport = Ch9325HidTransport("1a86:e008", backend=backend, timeout_s=2.0)
+    tach = UT372Tach("tach0", "1a86:e008", transport=transport, timeout_s=2.0)
+    tach.connect()
+    reading = tach.read()
+    assert reading.value == pytest.approx(123.45)
+    assert backend.resets == 1
+    tach.disconnect()
+
+
+def test_reattach_gives_up_when_device_does_not_return(monkeypatch):
+    monkeypatch.setattr(hid_ch9325, "REATTACH_TIMEOUT_S", 0.05)
+    backend = _ResettingBackend([b"005>656"])
+    transport = Ch9325HidTransport("1a86:e008", backend=backend, timeout_s=1.0)
+    transport.open()
+    with pytest.raises(InstrumentConnectionError, match="re-enumerate"):
+        transport.read_until(b"\r\n", max_bytes=PACKET_LEN + 8)

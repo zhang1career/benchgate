@@ -18,6 +18,8 @@ from benchgate.sim.tolerance import (
 def test_parse_and_format_spice_number():
     assert parse_spice_number("51k") == 51000.0
     assert parse_spice_number("22n") == pytest.approx(2.2e-8)
+    assert parse_spice_number("10k_match") == 10000.0
+    assert parse_spice_number("10R_0.1%") == 10.0
     out = format_spice_number(51510.0, "51k")
     assert out.endswith("k")
 

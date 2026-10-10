@@ -11,7 +11,8 @@ _METRIC_NAMES = (
     "min, max, avg, rms, pp, final, "
     "settling_time, settling_time_01pct, settling_time_001pct, "
     "overshoot_pct, slew_rate, integral, charge_nc, "
-    "bw_3db, peaking_db, gain_db_max, gain_db_first, phase_deg_first"
+    "bw_3db, peaking_db, gain_db_max, gain_db_first, phase_deg_first, "
+    "resistive_bw, phase_margin, unity_gain_freq, gain_margin_db"
 )
 
 TOOLS: dict[str, dict[str, Any]] = {

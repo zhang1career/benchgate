@@ -143,6 +143,10 @@ FREQ_METRICS = (
     "gain_db_max",
     "gain_db_first",
     "phase_deg_first",
+    "resistive_bw",
+    "phase_margin",
+    "unity_gain_freq",
+    "gain_margin_db",
 )
 METRIC_NAMES = TIME_METRICS + TRANSIENT_METRICS + FREQ_METRICS
 
@@ -260,6 +264,74 @@ def _interp_crossing(
     return f0 + frac * (f1 - f0)
 
 
+def _loop_gain_db(values: np.ndarray) -> np.ndarray:
+    """Absolute |T| in dB. Do not reference the first point — that is Z(f)."""
+    mag = np.abs(np.asarray(values))
+    return 20.0 * np.log10(np.maximum(mag, 1e-300))
+
+
+def _first_downward_crossing(db: np.ndarray, target_db: float) -> int | None:
+    """Index i where db[i-1] >= target and db[i] < target. None if no crossing."""
+    for i in range(1, len(db)):
+        if db[i - 1] >= target_db and db[i] < target_db:
+            return i
+    return None
+
+
+def _interp_log_axis(axis: np.ndarray, y: np.ndarray, index: int, x: float) -> float:
+    """Interpolate y at x between index-1 and index, log-f if both frequencies > 0."""
+    f0, f1 = float(axis[index - 1]), float(axis[index])
+    y0, y1 = float(y[index - 1]), float(y[index])
+    if f1 == f0:
+        return y1
+    if f0 > 0.0 and f1 > 0.0 and x > 0.0:
+        frac = (np.log10(x) - np.log10(f0)) / (np.log10(f1) - np.log10(f0))
+    else:
+        frac = (x - f0) / (f1 - f0)
+    return float(y0 + frac * (y1 - y0))
+
+
+def _loop_metric(values: np.ndarray, axis: np.ndarray, metric: str) -> float:
+    """Middlebrook / Tian return-ratio metrics on a complex T(f) series.
+
+    ``phase_margin``: 180° + arg(T) at the first downward |T|=1 crossing.
+    ``unity_gain_freq``: that crossing frequency.
+    ``gain_margin_db``: −|T|_dB at the first unwrapped-phase crossing of −180°.
+    """
+    t = np.asarray(values)
+    db = _loop_gain_db(t)
+    if metric in ("phase_margin", "unity_gain_freq"):
+        idx = _first_downward_crossing(db, 0.0)
+        if idx is None:
+            return float("nan")
+        f_ug = _interp_crossing(axis, db, idx, 0.0)
+        if metric == "unity_gain_freq":
+            return f_ug
+        ph = np.degrees(np.unwrap(np.angle(t)))
+        return 180.0 + _interp_log_axis(axis, ph, idx, f_ug)
+    # gain_margin_db
+    ph = np.degrees(np.unwrap(np.angle(t)))
+    idx = None
+    for i in range(1, len(ph)):
+        if ph[i - 1] > -180.0 and ph[i] <= -180.0:
+            idx = i
+            break
+    if idx is None:
+        return float("inf")
+    f0, f1 = float(axis[idx - 1]), float(axis[idx])
+    p0, p1 = float(ph[idx - 1]), float(ph[idx])
+    if p1 == p0:
+        f_pi = f1
+    elif f0 > 0.0 and f1 > 0.0:
+        frac = (-180.0 - p0) / (p1 - p0)
+        f_pi = float(10.0 ** (np.log10(f0) + frac * (np.log10(f1) - np.log10(f0))))
+    else:
+        frac = (-180.0 - p0) / (p1 - p0)
+        f_pi = f0 + frac * (f1 - f0)
+    db_at = _interp_log_axis(axis, db, idx, f_pi)
+    return float(-db_at)
+
+
 def _response_db(values: np.ndarray) -> tuple[np.ndarray, float]:
     """Magnitude in dB relative to the first sampled point, and that reference."""
     mag = np.abs(values)
@@ -281,6 +353,10 @@ def _compute_metric(
     params = params or {}
 
     if metric in FREQ_METRICS:
+        if metric in ("phase_margin", "unity_gain_freq", "gain_margin_db"):
+            if axis is None or axis.size != values.size or axis.size < 2:
+                return float("nan")
+            return _loop_metric(values, axis, metric)
         db, ref = _response_db(values)
         if metric == "phase_deg_first":
             # arg(H) at the first sweep point. Do not set abs: true on this
@@ -295,6 +371,17 @@ def _compute_metric(
             return peak + (20.0 * float(np.log10(ref)) if ref > 0.0 else float("nan"))
         if axis is None or axis.size != values.size or axis.size < 2:
             return float("nan")
+        if metric == "resistive_bw":
+            # Last swept frequency that is still ohmic: |phase| < phase_deg
+            # and |Δ|Z|| < mag_db versus the first point. Defaults match the
+            # TARS Z(f) definition. Not a loop-stability metric.
+            phase_lim = float(params.get("phase_deg", 10.0))
+            mag_lim = float(params.get("mag_db", 1.0))
+            ph = np.angle(np.asarray(values), deg=True)
+            ok = (np.abs(ph) < phase_lim) & (np.abs(db) < mag_lim)
+            if not np.any(ok):
+                return float("nan")
+            return float(np.real(axis[np.nonzero(ok)[0][-1]]))
         below = np.nonzero(db < _MINUS_3DB)[0]
         if below.size == 0:
             # never falls 3 dB anywhere in the swept range

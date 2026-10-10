@@ -15,6 +15,8 @@ _SPICE_SUFFIX = {
     "m": 1e-3,
     "k": 1e3,
     "K": 1e3,
+    "R": 1.0,
+    "r": 1.0,
     "M": 1e6,
     "G": 1e9,
 }
@@ -24,7 +26,10 @@ def parse_spice_number(text: str) -> float:
     text = str(text).strip()
     if not text:
         raise ValueError("empty spice value")
-    m = re.match(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([fpnuMkKMGT]?)$", text)
+    m = re.match(
+        r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([fpnuMkKMGTrR]?)(?:_.*)?$",
+        text,
+    )
     if not m:
         return float(text)
     base = float(m.group(1))
@@ -35,7 +40,10 @@ def parse_spice_number(text: str) -> float:
 def format_spice_number(value: float, template: str) -> str:
     """Preserve suffix style from template (e.g. 51k, 22n)."""
     template = str(template).strip()
-    m = re.match(r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([fpnuMkKMGT]?)$", template)
+    m = re.match(
+        r"^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([fpnuMkKMGTrR]?)(?:_.*)?$",
+        template,
+    )
     if not m:
         return f"{value:g}"
     suf = m.group(2)
