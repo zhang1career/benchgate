@@ -40,6 +40,41 @@ def load_profile_save(config_path: Path, profile: str = "default") -> list[str]:
     return [str(s) for s in save] if save else []
 
 
+def _when(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(v) for v in value)
+
+
+def load_profile_rewrites(config_path: Path, profile: str = "default") -> list[tuple[str, str, tuple[str, ...]]]:
+    """``netlist_rewrite: [{find, replace, when?}, ...]`` — board-specific netlist edits, in order.
+
+    ``when`` (string or list) limits a rule to netlists that contain every listed
+    substring before any rewrite of this profile is applied.
+    """
+    rules = load_profile_block(config_path, profile).get("netlist_rewrite") or []
+    out = []
+    for i, rule in enumerate(rules):
+        if not isinstance(rule, dict) or "find" not in rule or "replace" not in rule:
+            raise ValueError(f"{config_path} [{profile}] netlist_rewrite[{i}] needs 'find' and 'replace'")
+        out.append((str(rule["find"]), str(rule["replace"]), _when(rule.get("when"))))
+    return out
+
+
+def load_profile_append(config_path: Path, profile: str = "default") -> tuple[list[str], tuple[str, ...]]:
+    """``netlist_append`` — element lines added before ``.control``.
+
+    Either a list of lines, or ``{lines: [...], when: [...]}`` to add them only to
+    netlists containing every ``when`` substring.
+    """
+    raw = load_profile_block(config_path, profile).get("netlist_append") or []
+    if isinstance(raw, dict):
+        return [str(line) for line in raw.get("lines") or []], _when(raw.get("when"))
+    return [str(line) for line in raw], ()
+
+
 def load_profile_operating_point(config_path: Path, profile: str = "default") -> dict[str, Any]:
     op = load_profile_block(config_path, profile).get("operating_point")
     return dict(op) if op else {}

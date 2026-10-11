@@ -149,6 +149,35 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "lab_import": {
+        "description": (
+            "Store measurements benchgate did not capture (scope CSV export, readings copied off a meter, "
+            "screenshots) as a Session under <design>/models/captured and a line in the record ledger. "
+            "Touches no instrument. CSV: first numeric column is time, each further column one channel; "
+            "the original files are kept as attachments."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "waveforms": {"type": "array", "items": {"type": "string"}, "description": "CSV file paths"},
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Readings as name=number[unit], e.g. 'vout=23.6V', 'iin=85mA'",
+                },
+                "files": {"type": "array", "items": {"type": "string"}, "description": "Attachments (images, PDFs, raw exports)"},
+                "instrument": {"type": "string", "description": "Where the data came from, e.g. 'Rigol DS1054Z USB export'"},
+                "component_ref": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string", "description": "Free text stored in session.yaml (defaults to purpose)"},
+                "captured_at": {"type": "string", "description": "ISO-8601 time of the measurement (default now; no zone = local)"},
+                "time_scale": {"type": "number", "description": "Multiply the CSV time column (e.g. 0.001 when it is in ms)"},
+                "sample_interval_s": {"type": "number", "description": "First column is a sample index; time = index × this"},
+            },
+            "required": ["design_dir"],
+        },
+    },
     "lab_list": {
         "description": "List configured instruments and effective role bindings",
         "parameters": {
@@ -401,9 +430,9 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "design_dir": {"type": "string"},
                 "manifest_path": {"type": "string"},
                 "output_dir": {"type": "string"},
-                "profile": {"type": "string"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block with the cosim settings"},
             },
-            "required": ["design_dir"],
+            "required": ["design_dir", "profile"],
         },
     },
     "gate_report": {
@@ -453,6 +482,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "properties": {
                 "design_dir": {"type": "string"},
                 "profile": {"type": "string", "description": "sim_profiles.yaml block (default default)"},
+                "force": {"type": "boolean", "description": "Run even if no change was detected since the last watch"},
                 "run_pipeline": {"type": "boolean", "description": "Sync models/blocks.yaml (default true)"},
                 "run_sim": {"type": "boolean", "description": "Run ngspice when mapping ready (default true)"},
                 "run_gate": {"type": "boolean", "description": "Write gate report with spec/valid_range (default true)"},
@@ -521,7 +551,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 "design_dir": {"type": "string"},
-                "profile": {"type": "string", "description": "sim_profiles.yaml block (default charge_pump)"},
+                "profile": {"type": "string", "description": "sim_profiles.yaml block to sample"},
                 "n_samples": {"type": "integer", "description": "Sample budget (default 200)"},
                 "seed": {"type": "integer", "description": "RNG seed (default 42)"},
                 "strategy": {
@@ -541,7 +571,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "maxstep": {"type": "string"},
                 "output_dir": {"type": "string"},
             },
-            "required": ["design_dir"],
+            "required": ["design_dir", "profile"],
         },
     },
     "lab_thermal_capture": {
@@ -789,7 +819,61 @@ TOOLS: dict[str, dict[str, Any]] = {
             "required": ["design_dir"],
         },
     },
+    "index_status": {
+        "description": (
+            "Design verification status from the record ledger (models/index.jsonl): latest record per kind, "
+            "whether each is stale against the current schematic/manifest/blocks/profile, and why the design "
+            "is not yet verified. Read this before claiming a design change is verified."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"design_dir": {"type": "string"}},
+            "required": ["design_dir"],
+        },
+    },
+    "index_query": {
+        "description": (
+            "Search past benchgate records (sessions, sims, sweeps, tolerance, gate, model builds) for a design, "
+            "newest first. Use to find earlier measurements or verdicts instead of scanning report folders."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "design_dir": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "session", "sim_run", "gate", "sim_sweep", "block_sweep",
+                        "stress_sweep", "tolerance", "model_build", "cosim",
+                    ],
+                },
+                "status": {"type": "string", "description": "pass | fail | unchecked | done | ok | empty"},
+                "since": {"type": "string", "description": "ISO-8601 lower bound"},
+                "until": {"type": "string", "description": "ISO-8601 upper bound"},
+                "tag": {"type": "string"},
+                "text": {"type": "string", "description": "Substring match over the whole record (e.g. a reference or purpose word)"},
+                "limit": {"type": "integer", "description": "Max records (default 20)"},
+            },
+            "required": ["design_dir"],
+        },
+    },
 }
+
+_RECORD_CONTEXT_PROPERTIES = {
+    "purpose": {
+        "type": "string",
+        "description": (
+            "One sentence on why this call is made (e.g. 'recheck bandwidth after R51 10k→100k'). "
+            "Stored with the record in models/index.jsonl so the person can later see the reasoning."
+        ),
+    },
+    "chat_id": {
+        "type": "string",
+        "description": "Current agent conversation id, if known; links the record back to this chat.",
+    },
+}
+for _spec in TOOLS.values():
+    _spec["parameters"].setdefault("properties", {}).update(_RECORD_CONTEXT_PROPERTIES)
 
 
 def list_tools() -> list[dict[str, Any]]:

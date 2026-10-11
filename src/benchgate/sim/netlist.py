@@ -10,18 +10,6 @@ import yaml
 from benchgate.io.manifest import load_manifest
 from benchgate.schemas import MappingManifest, SpiceModelKind
 
-_GATE = "/Gate_Drive/"
-_REFRESH_BUS = f"{_GATE}BST_REF"
-_SHARED_NET = f"{_GATE}_NO_NET_"
-
-
-def _fix_ams1117_pins(text: str) -> str:
-    return text.replace(
-        "XU5 GND +3V3 VIN_PORT AMS1117_3V3",
-        "XU5 VIN_PORT +3V3 GND AMS1117_3V3",
-    )
-
-
 def _fix_zero_ohm_links(text: str) -> str:
     """Replace 0 Ω schematic jumpers with 1 mΩ so ngspice avoids 1e-12 Ω warnings."""
     return re.sub(
@@ -161,52 +149,6 @@ def inject_save_directives(text: str, save_list: list[str]) -> str:
     return text
 
 
-def _name_refresh_bus(text: str) -> str:
-    """D2/D3 + R95/R96 share an unnamed net; label it BST_REF (HS refresh, not bootstrap charge)."""
-    replacements = [
-        (f"D3 {_GATE}SW_1 {_SHARED_NET}", f"D3 {_GATE}SW_1 {_REFRESH_BUS}"),
-        (f"D2 {_GATE}SW_2 {_SHARED_NET}", f"D2 {_GATE}SW_2 {_REFRESH_BUS}"),
-        (f"D3 {_GATE}SW_IN {_SHARED_NET}", f"D3 {_GATE}SW_IN {_REFRESH_BUS}"),
-        (f"D2 {_GATE}SW_OUT {_SHARED_NET}", f"D2 {_GATE}SW_OUT {_REFRESH_BUS}"),
-        (f"R95 {_GATE}BST_REFRESH {_SHARED_NET}", f"R95 {_GATE}BST_REFRESH {_REFRESH_BUS}"),
-        (f"R96 GND {_SHARED_NET}", f"R96 GND {_REFRESH_BUS}"),
-        (f"R97 {_SHARED_NET} {_SHARED_NET}", "* benchgate: R97 removed (shorted refresh net)"),
-    ]
-    for old, new in replacements:
-        text = text.replace(old, new)
-    return text
-
-
-def _split_legacy_merged_drivers(text: str) -> str:
-    """
-    Older KiCad exports tied U2/U3 HB/HO/LO to one net.
-    Split per-driver nets; keep D2/D3 on the HS refresh bus (not on BST).
-    """
-    replacements = [
-        (
-            f"XU2 VIN_PORT {_SHARED_NET} {_SHARED_NET} {_GATE}SW_IN "
-            f"{_GATE}PWM_HIN1 {_GATE}PWM_LIN1 GND {_SHARED_NET} UCC27211",
-            f"XU2 VIN_PORT {_GATE}BST_1 {_GATE}HO1 {_GATE}SW_IN "
-            f"{_GATE}PWM_HIN1 {_GATE}PWM_LIN1 GND {_GATE}LO1 UCC27211",
-        ),
-        (
-            f"XU3 VIN_PORT {_SHARED_NET} {_SHARED_NET} {_GATE}SW_OUT "
-            f"{_GATE}PWM_HIN2 {_GATE}PWM_LIN2 GND {_SHARED_NET} UCC27211",
-            f"XU3 VIN_PORT {_GATE}BST_2 {_GATE}HO2 {_GATE}SW_OUT "
-            f"{_GATE}PWM_HIN2 {_GATE}PWM_LIN2 GND {_GATE}LO2 UCC27211",
-        ),
-        (f"R91 {_SHARED_NET} {_GATE}Q1_GATE", f"R91 {_GATE}HO1 {_GATE}Q1_GATE"),
-        (f"R92 {_SHARED_NET} {_GATE}Q2_GATE", f"R92 {_GATE}LO1 {_GATE}Q2_GATE"),
-        (f"R93 {_SHARED_NET} {_GATE}Q3_GATE", f"R93 {_GATE}HO2 {_GATE}Q3_GATE"),
-        (f"R94 {_SHARED_NET} {_GATE}Q4_GATE", f"R94 {_GATE}LO2 {_GATE}Q4_GATE"),
-        (f"C81 {_SHARED_NET} {_GATE}SW_IN", f"C81 {_GATE}BST_1 {_GATE}SW_IN"),
-        (f"C82 {_SHARED_NET} {_GATE}SW_OUT", f"C82 {_GATE}BST_2 {_GATE}SW_OUT"),
-    ]
-    for old, new in replacements:
-        text = text.replace(old, new)
-    return text
-
-
 _PLACEHOLDER_RE = re.compile(r"^(\S+)\s+__\1\b.*$", re.MULTILINE)
 
 
@@ -221,80 +163,34 @@ def strip_unmodeled_placeholders(netlist_text: str) -> str:
     return _PLACEHOLDER_RE.sub(r"* benchgate: dropped unmodeled placeholder '\g<0>'", netlist_text)
 
 
-def split_gate_drive_nets(netlist_text: str) -> str:
+def apply_netlist_rewrites(netlist_text: str, rules: list[tuple[str, str, tuple[str, ...]]]) -> str:
+    """Literal find → replace, in order, from a profile's ``netlist_rewrite``.
+
+    ``when`` substrings are checked against the netlist as it was before the first rule.
     """
-    Normalize gate-drive SPICE netlists for ngspice.
-
-    - Bootstrap: UCC27211 internal diode + C81/C82 on BST_* / SW_*
-    - D2/D3: HS refresh assist on BST_REF (not bootstrap charge path)
-    - Legacy: split merged HB/HO/LO when KiCad exported a single _NO_NET_
-    """
-    if "UCC27211" not in netlist_text:
-        return _fix_ams1117_pins(netlist_text)
-
-    text = netlist_text
-    if f"XU2 VIN_PORT {_SHARED_NET}" in text:
-        text = _split_legacy_merged_drivers(text)
-    text = _name_refresh_bus(text)
-    return _fix_ams1117_pins(text)
+    original = netlist_text
+    for find, replace, when in rules:
+        if all(w in original for w in when):
+            netlist_text = netlist_text.replace(find, replace)
+    return netlist_text
 
 
-_VOUT = "/H-Bridge_Power/VOUT"
-_ISENSE_RAW = "/H-Bridge_Power/ISENSE_RAW"
-_ADC_IOUT = "/Sense_&_Control/ADC_IOUT"
-
-
-def format_rload(rload_ohm: float) -> str:
-    """Load resistor between VOUT and ISENSE_RAW (J2 differential output)."""
-    return f"RLOAD {_VOUT} {_ISENSE_RAW} {rload_ohm:g}"
-
-
-def inject_isense_path(
-    netlist_text: str,
-    *,
-    ina180_lib: Path | None = None,
-    rload_ohm: float = 10.0,
-) -> str:
-    """
-    KiCad marks U4 (INA180A3) exclude_from_sim; inject ADC_IOUT for ngspice.
-
-    Schematic: J2+ = VOUT, J2- = ISENSE_RAW, R51 = ISENSE_RAW → GND.
-    Load is RLOAD across VOUT–ISENSE_RAW. At DC, I(R51) = (VOUT−ISENSE)/Rload.
-
-    INA180 is emulated from the J2 differential (Iload); this matches the shunt at DC
-    and avoids switch-node ripple that dominates V(ISENSE_RAW)−GND in tran sim.
-    """
-    if "benchgate ISENSE path" in netlist_text:
+def append_netlist_lines(netlist_text: str, lines: list[str], when: tuple[str, ...] = ()) -> str:
+    """Insert a profile's ``netlist_append`` lines before ``.control`` (else ``.end``)."""
+    if not lines or not all(w in netlist_text for w in when):
         return netlist_text
-    if re.search(r"^Eiout\s", netlist_text, flags=re.MULTILINE | re.IGNORECASE):
-        return netlist_text
-    if _ADC_IOUT not in netlist_text or _ISENSE_RAW not in netlist_text:
-        return netlist_text
-    if _VOUT not in netlist_text:
-        return netlist_text
-
-    scale = 1.0 / rload_ohm
-    lines: list[str] = [
-        "* --- benchgate ISENSE path (Iload from J2 VOUT–ISENSE_RAW) ---",
-        f"Eiout {_ADC_IOUT} GND VALUE={{min(max({scale}*(V({_VOUT})-V({_ISENSE_RAW})), 0), 3.2)}}",
-    ]
     block = "\n".join(lines) + "\n"
-    if re.search(r"^\.control\b", netlist_text, flags=re.MULTILINE | re.IGNORECASE):
-        return re.sub(
-            r"^(\.control\b)",
-            block + r"\1",
-            netlist_text,
-            count=1,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
-    if re.search(r"^\.end\s*$", netlist_text, flags=re.MULTILINE | re.IGNORECASE):
-        return re.sub(
-            r"^(\.end\s*)$",
-            block + r"\1",
-            netlist_text,
-            count=1,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
+    if block in netlist_text:
+        return netlist_text
+    for pattern in (r"^(\.control\b)", r"^(\.end\s*)$"):
+        if re.search(pattern, netlist_text, flags=re.MULTILINE | re.IGNORECASE):
+            return re.sub(
+                pattern,
+                lambda m: block + m.group(1),
+                netlist_text,
+                count=1,
+                flags=re.MULTILINE | re.IGNORECASE,
+            )
     return netlist_text.rstrip() + "\n" + block
 
 
@@ -425,14 +321,13 @@ def prepare_netlist(
     text = netlist_path.read_text(encoding="utf-8", errors="replace")
     manifest = load_manifest(manifest_path)
     from benchgate.sim.netlist_fixup import apply_netlist_fixups, load_fixup_config
+    from benchgate.sim.profile import load_profile_append, load_profile_rewrites, load_profile_save
 
     fixup_cfg = load_fixup_config(sim_profile_path, profile) if sim_profile_path else None
     text = apply_netlist_fixups(text, manifest, fixup_cfg)
     if sim_profile_path:
         text = strip_excluded_lines(text, load_profile_excludes(sim_profile_path, profile))
-    text = split_gate_drive_nets(text)
-
-    from benchgate.sim.profile import load_profile_save
+        text = apply_netlist_rewrites(text, load_profile_rewrites(sim_profile_path, profile))
 
     save_list = load_profile_save(sim_profile_path, profile) if sim_profile_path else []
     text = inject_models(
@@ -442,7 +337,9 @@ def prepare_netlist(
         profile=profile,
         save_list=save_list,
     )
-    text = inject_isense_path(text)
+    if sim_profile_path:
+        lines, when = load_profile_append(sim_profile_path, profile)
+        text = append_netlist_lines(text, lines, when)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return output_path

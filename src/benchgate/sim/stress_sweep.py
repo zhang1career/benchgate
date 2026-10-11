@@ -156,4 +156,7 @@ def run_stress_sweep(
     report_path = output_dir / "stress_sweep_report.json"
     report_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     report.report_path = str(report_path)
+    from benchgate import ledger
+
+    ledger.record_report(design_dir, "stress_sweep", report.to_dict(), report_path)
     return report

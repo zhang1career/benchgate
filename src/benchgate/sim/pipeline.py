@@ -88,6 +88,7 @@ def run_project_sim(
         )
         report_path = output_dir / "sim_report.json"
         report_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        _record(design_dir, manifest_path, report, report_path, profile)
         return report, SimResult(
             success=False,
             stdout="",
@@ -172,7 +173,18 @@ def run_project_sim(
         if compare_specs:
             export_sim_waveforms(result.raw_output, compare_specs, output_dir)
 
+    _record(design_dir, manifest_path, report, report_path, profile)
     return report, result
+
+
+def _record(design_dir: Path, manifest_path: Path, report: SimRunReport, report_path: Path, profile: str) -> None:
+    from benchgate import ledger
+
+    design = Path(design_dir).resolve()
+    extra: dict = {"profile": profile}
+    if ledger.design_from_manifest(manifest_path) != design:
+        extra["scope"] = "alt"
+    ledger.record_report(design, "sim_run", report.to_dict(), report_path, extra=extra)
 
 
 def run_preflight_only(

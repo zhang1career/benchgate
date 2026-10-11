@@ -165,10 +165,11 @@ def watch_once(
     tolerance_strategy: str = "auto",
     tolerance_seed: int = 42,
     tolerance_jobs: int = 4,
+    force: bool = False,
 ) -> dict:
     changed = detect_changes(design_dir, state_path)
     triggered_sessions = detect_tagged_session_changes(design_dir, state_path)
-    design_changed = bool(changed)
+    design_changed = bool(changed) or force
     session_triggered = bool(triggered_sessions)
     operating_point: dict = {}
     result: dict = {

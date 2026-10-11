@@ -77,6 +77,7 @@ benchgate watch loop --design <工程目录> --profile <profile名>
 | [workflow-cases.puml](docs/diagrams/workflow-cases.puml) | 设计过程中后台跟跑 |
 | [command-tree.puml](docs/diagrams/command-tree.puml) | CLI 命令树（mindmap） |
 | [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全部叶子命令说明 |
+| [RECORD_LEDGER.md](docs/RECORD_LEDGER.md) | 记录台账与自动复核的用法 |
 | [command-flow.puml](docs/diagrams/command-flow.puml) | `watch once` 默认串联 |
 | [case-charge-pump.puml](docs/diagrams/case-charge-pump.puml) | charge-pump 示例 |
 
@@ -225,6 +226,7 @@ pytest && ruff check src tests
 | 路径 | 内容 |
 |------|------|
 | [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | 全部叶子命令说明 |
+| [RECORD_LEDGER.md](docs/RECORD_LEDGER.md) | 记录台账与自动复核的用法 |
 | [MINIMUM_SCOPE.md](docs/MINIMUM_SCOPE.md) | 职责边界 |
 | [RFC ModelProvider](docs/RFC_LOCAL_SIM_MODEL_PROVIDER.md) | Provider 协议 |
 | [TODO.md](TODO.md) | 待办 |

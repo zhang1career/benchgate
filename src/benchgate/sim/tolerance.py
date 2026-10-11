@@ -496,7 +496,7 @@ def run_tolerance_study(
     *,
     blocks_yaml: Path,
     sim_profile_path: Path,
-    profile: str = "charge_pump",
+    profile: str,
     n_samples: int = 200,
     seed: int = 42,
     strategy: str = "lhs",
@@ -564,4 +564,7 @@ def run_tolerance_study(
     out_path = output_dir / "mc_tolerance.json"
     out_path.write_text(json.dumps(primary.to_dict(), indent=2), encoding="utf-8")
     primary.report_path = str(out_path)
+    from benchgate import ledger
+
+    ledger.record_report(design_dir, "tolerance", primary.to_dict(), out_path)
     return primary

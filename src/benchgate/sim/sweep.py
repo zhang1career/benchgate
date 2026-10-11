@@ -306,7 +306,11 @@ def run_sweep(
         ran_at=datetime.now(timezone.utc).isoformat(),
         metrics=list(specs),
     )
-    return _write_report(report, output_dir, "sweep_report.json")
+    report = _write_report(report, output_dir, "sweep_report.json")
+    from benchgate import ledger
+
+    ledger.record_report(design_dir, "sim_sweep", report.to_dict(), report.report_path)
+    return report
 
 
 def run_block_sweep(
@@ -353,7 +357,12 @@ def run_block_sweep(
         ran_at=datetime.now(timezone.utc).isoformat(),
         metrics=list(specs),
     )
-    return _write_report(report, output_dir, "block_sweep_report.json")
+    report = _write_report(report, output_dir, "block_sweep_report.json")
+    from benchgate import ledger
+
+    design = ledger.find_design_dir(output_dir) or ledger.find_design_dir(netlist_path)
+    ledger.record_report(design, "block_sweep", report.to_dict(), report.report_path)
+    return report
 
 
 def aggregate_sweep_metrics(report: SweepReport | dict) -> dict[str, float]:

@@ -23,6 +23,7 @@ from __future__ import annotations
 import csv
 import json
 import secrets
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import StringIO
@@ -75,6 +76,7 @@ class SessionMeta:
     derived: dict[str, float] = field(default_factory=dict)
     notes: str = ""
     path: Path | None = None
+    attachments: list[str] = field(default_factory=list)
 
     def channel(self, name: str) -> ChannelMeta | None:
         for ch in self.channels:
@@ -83,7 +85,7 @@ class SessionMeta:
         return None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "session_id": self.session_id,
             "captured_at": _iso(self.captured_at),
             "design": self.design,
@@ -100,6 +102,9 @@ class SessionMeta:
             "derived": dict(self.derived),
             "notes": self.notes,
         }
+        if self.attachments:
+            out["attachments"] = list(self.attachments)
+        return out
 
 
 def _meta_from_dict(d: dict[str, Any], path: Path) -> SessionMeta:
@@ -121,6 +126,7 @@ def _meta_from_dict(d: dict[str, Any], path: Path) -> SessionMeta:
         derived=dict(d.get("derived", {})),
         notes=d.get("notes", ""),
         path=path,
+        attachments=list(d.get("attachments", [])),
     )
 
 
@@ -359,11 +365,26 @@ class LabDataStore:
         notes: str = "",
         session_id: str | None = None,
         captured_at: datetime | None = None,
+        attachments: list[Path] | None = None,
     ) -> SessionMeta:
         captured_at = captured_at or datetime.now(timezone.utc)
         sid = session_id or new_session_id(captured_at)
         sdir = self.sessions_dir / sid
         sdir.mkdir(parents=True, exist_ok=True)
+
+        attached: list[str] = []
+        if attachments:
+            adir = sdir / "attachments"
+            adir.mkdir(exist_ok=True)
+            for src in attachments:
+                src = Path(src)
+                dest = adir / src.name
+                stem, suffix, n = dest.stem, dest.suffix, 1
+                while dest.exists():
+                    dest = adir / f"{stem}_{n}{suffix}"
+                    n += 1
+                shutil.copy2(src, dest)
+                attached.append(f"attachments/{dest.name}")
 
         channels: list[ChannelMeta] = []
         grouped: list[tuple[str, dict[str, Any]]] = [
@@ -400,10 +421,14 @@ class LabDataStore:
             derived={k: float(v) for k, v in derived.items()},
             notes=notes,
             path=sdir,
+            attachments=attached,
         )
         (sdir / "session.yaml").write_text(
             yaml.safe_dump(meta.to_dict(), sort_keys=False, allow_unicode=True), encoding="utf-8"
         )
+        from benchgate.ledger import record_session
+
+        record_session(self.root, meta.to_dict())
         return meta
 
     @staticmethod

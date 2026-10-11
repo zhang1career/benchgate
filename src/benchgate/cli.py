@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from benchgate import __version__
 from benchgate.agent.dispatch import dispatch
 from benchgate.agent.tools import list_tools
 from benchgate.io.manifest import load_manifest
+from benchgate.ledger import KIND_LABELS
 from benchgate.mapping.engine import mapping_status, sync_project
 from benchgate.paths import benchgate_paths, resolve_project_path
 
@@ -22,7 +24,7 @@ CLI_DESCRIPTION = (
 
 DOCS_EPILOG = """\
 documentation (in the benchgate install / source tree):
-  docs/CLI_REFERENCE.md     all leaf commands (44)
+  docs/CLI_REFERENCE.md     leaf commands
   docs/diagrams/command-tree.puml   CLI mindmap
   docs/examples/blocks.yaml         top-down blocks template
   docs/examples/bench_compare.yaml  bench vs sim probe mapping
@@ -70,6 +72,12 @@ def _help_formatter() -> type[argparse.RawDescriptionHelpFormatter]:
 
 def _add_design_arg(parser: argparse.ArgumentParser, *, default: str = "design") -> None:
     parser.add_argument("--design", default=default, help=DESIGN_ARG_HELP)
+    parser.add_argument(
+        "--purpose",
+        default=None,
+        help="Why this run is made; stored with its record in <design>/models/index.jsonl",
+    )
+    parser.add_argument("--chat-id", dest="chat_id", default=None, help=argparse.SUPPRESS)
 
 
 def _paths(args: argparse.Namespace):
@@ -275,6 +283,8 @@ def cmd_watch_once(args: argparse.Namespace) -> int:
         params["run_gate"] = False
     if args.no_auto_capture:
         params["run_auto_capture"] = False
+    if args.force:
+        params["force"] = True
     if args.auto_capture_dry_run:
         params["auto_capture_dry_run"] = True
     if args.no_tolerance:
@@ -443,6 +453,32 @@ def cmd_lab_read(args: argparse.Namespace) -> int:
     if args.instrument:
         params["instrument"] = args.instrument
     result = dispatch("lab_read", params)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_lab_import(args: argparse.Namespace) -> int:
+    from benchgate.lab.importer import LabImportError
+
+    params: dict = {
+        "design_dir": args.design,
+        "waveforms": args.wave,
+        "values": args.value,
+        "files": args.file,
+        "time_scale": args.time_scale,
+    }
+    for key in ("instrument", "component_ref", "notes", "sample_interval_s"):
+        if getattr(args, key) is not None:
+            params[key] = getattr(args, key)
+    if args.at:
+        params["captured_at"] = args.at
+    if args.tags:
+        params["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    try:
+        result = dispatch("lab_import", params)
+    except LabImportError as exc:
+        print(f"benchgate: {exc}", file=sys.stderr)
+        return 2
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
@@ -934,6 +970,272 @@ def cmd_mcp_serve(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index_status(args: argparse.Namespace) -> int:
+    from benchgate import ledger
+
+    status = ledger.design_status(_paths(args).design)
+    print(json.dumps(status, indent=2, ensure_ascii=False))
+    return 1 if status["problems"] else 0
+
+
+def cmd_index_list(args: argparse.Namespace) -> int:
+    from benchgate import ledger
+
+    records = ledger.query(
+        _paths(args).design,
+        kind=args.kind,
+        status=args.status,
+        since=args.since,
+        until=args.until,
+        tag=args.tag,
+        text=args.text,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(records, indent=2, ensure_ascii=False))
+        return 0
+    for rec in records:
+        purpose = f"  — {rec['purpose']}" if rec.get("purpose") else ""
+        print(
+            f"{ledger._local(rec.get('at'))}  {ledger.KIND_LABELS.get(rec['kind'], rec['kind']):<6} "
+            f"{rec.get('status', ''):<9} {ledger.summary_line(rec)}  [{rec['id']}]{purpose}"
+        )
+    return 0
+
+
+def cmd_index_rebuild(args: argparse.Namespace) -> int:
+    from benchgate import ledger
+
+    result = ledger.rebuild(_paths(args).design, dry_run=args.dry_run)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_index_render(args: argparse.Namespace) -> int:
+    from benchgate import ledger
+
+    path = ledger.render_index(_paths(args).design)
+    print(path if path else "no records yet")
+    return 0
+
+
+def cmd_index_check(args: argparse.Namespace) -> int:
+    from benchgate import hooks
+
+    if hooks.env_disabled():
+        return 0
+    if args.staged:
+        root = hooks.repo_root(Path.cwd())
+        left_out = hooks.ledger_left_out(root)
+        if left_out:
+            print("benchgate：实验记录台账有改动，没有放进这次提交：", file=sys.stderr)
+            for item in left_out:
+                print(f"  - {item}", file=sys.stderr)
+            print("  需要一起提交时：git add 上述文件后再提交。", file=sys.stderr)
+        if args.no_gate:
+            return 0
+        designs = hooks.staged_designs(root)
+        if not designs:
+            return 0
+        ok, text = hooks.check_designs(designs, root=root)
+        if not ok:
+            print("benchgate：本次提交改动了设计输入，但验证结论不是最新的。\n" + text, file=sys.stderr)
+            print("确需先提交：git commit --no-verify", file=sys.stderr)
+        return 0 if ok else 1
+    design = _paths(args).design
+    ok, text = hooks.check_designs([design], root=Path.cwd())
+    print(text)
+    return 0 if ok else 1
+
+
+def cmd_hooks_install(args: argparse.Namespace) -> int:
+    from benchgate import hooks
+
+    try:
+        result = hooks.install(
+            Path(args.repo),
+            cursor=not args.no_cursor,
+            git=not args.no_git,
+            profile=args.profile,
+            sim=not args.no_sim,
+        )
+    except (FileNotFoundError, ValueError, subprocess.CalledProcessError) as exc:
+        print(f"benchgate: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_hooks_uninstall(args: argparse.Namespace) -> int:
+    from benchgate import hooks
+
+    print(json.dumps(hooks.uninstall(Path(args.repo)), indent=2, ensure_ascii=False))
+    return 0
+
+
+def _profile_catalog(args: argparse.Namespace, *, writing: bool):
+    from benchgate.sim.profile_catalog import resolve_catalog
+
+    design = Path(args.design) if args.design else None
+    return resolve_catalog(design, use_global=args.use_global, use_local=args.use_local, writing=writing)
+
+
+def _profile_repo(args: argparse.Namespace) -> Path | None:
+    from benchgate.sim.profile_catalog import git_repo_root
+
+    if args.repo:
+        return Path(args.repo).expanduser().resolve()
+    if args.design:
+        return git_repo_root(Path(args.design).expanduser().resolve())
+    return None
+
+
+def _profile_error(exc: Exception) -> int:
+    print(f"benchgate: {exc}", file=sys.stderr)
+    return 2
+
+
+def cmd_sim_profile_list(args: argparse.Namespace) -> int:
+    from benchgate.sim.profile_catalog import ProfileCatalogError, list_profiles, local_catalog_path
+
+    try:
+        path, scope = _profile_catalog(args, writing=False)
+        rows = list_profiles(path)
+    except ProfileCatalogError as exc:
+        return _profile_error(exc)
+    print(f"文件：{path}")
+    print("范围：本机共用" if scope == "shared" else "范围：这块板自己的文件")
+    if args.use_global and args.design and local_catalog_path(args.design).is_file():
+        print("这块板有自己的 sim_profiles.yaml，仿真读的是那一份，不是上面这份。")
+    elif args.design and scope == "shared" and not local_catalog_path(args.design).is_file():
+        print("这块板没有自己的 sim_profiles.yaml，仿真用的是上面这份共用文件。")
+    if not rows:
+        print("（没有名字）")
+    for row in rows:
+        description = f"  {row['description']}" if row["description"] else ""
+        print(f"{row['name']}{description}")
+    return 0
+
+
+def cmd_sim_profile_show(args: argparse.Namespace) -> int:
+    from benchgate.sim.profile_catalog import ProfileCatalogError, show_profile
+
+    try:
+        path, _scope = _profile_catalog(args, writing=False)
+        print(show_profile(path, args.name), end="")
+    except ProfileCatalogError as exc:
+        return _profile_error(exc)
+    return 0
+
+
+def cmd_sim_profile_add(args: argparse.Namespace) -> int:
+    from benchgate.sim.profile_catalog import ProfileCatalogError, add_profile, shared_catalog_path
+
+    try:
+        path, scope = _profile_catalog(args, writing=True)
+        source_path = shared_catalog_path() if scope == "local" else None
+        result = add_profile(path, args.name, args.source, source_path=source_path)
+    except ProfileCatalogError as exc:
+        return _profile_error(exc)
+    print(f"已添加 {result['name']}（从 {result['source_file']} 的 {result['source']} 复制）")
+    print(f"文件：{result['path']}")
+    if result["created_file"] and scope == "local":
+        print("这份文件一旦存在，这块板就不再使用本机共用文件里的其他名字。")
+    _warn_shared_edit_hidden_by_local(args)
+    return 0
+
+
+def cmd_sim_profile_rename(args: argparse.Namespace) -> int:
+    from benchgate.sim.profile_catalog import ProfileCatalogError, rename_profile, update_hook_profile
+
+    try:
+        path, _scope = _profile_catalog(args, writing=True)
+        result = rename_profile(path, args.old, args.new, force=args.force)
+        repo = _profile_repo(args)
+        hook_changed = update_hook_profile(repo, args.old, args.new) if repo else False
+    except ProfileCatalogError as exc:
+        return _profile_error(exc)
+    print(f"已改名 {result['old']} → {result['new']}")
+    print(f"文件：{result['path']}")
+    _print_hook_result(repo, hook_changed, removed=False)
+    print("台账里已经记下的旧名字保持原样。")
+    _warn_shared_edit_hidden_by_local(args)
+    return 0
+
+
+def cmd_sim_profile_remove(args: argparse.Namespace) -> int:
+    from benchgate.sim.profile_catalog import ProfileCatalogError, remove_profile, update_hook_profile
+
+    try:
+        path, _scope = _profile_catalog(args, writing=True)
+        result = remove_profile(path, args.name, force=args.force)
+        repo = _profile_repo(args)
+        hook_changed = update_hook_profile(repo, args.name, None) if repo else False
+    except ProfileCatalogError as exc:
+        return _profile_error(exc)
+    print(f"已删除 {result['name']}")
+    print(f"文件：{result['path']}")
+    _print_hook_result(repo, hook_changed, removed=True)
+    _warn_shared_edit_hidden_by_local(args)
+    return 0
+
+
+def _warn_shared_edit_hidden_by_local(args: argparse.Namespace) -> None:
+    from benchgate.sim.profile_catalog import local_catalog_path
+
+    if args.use_global and args.design and local_catalog_path(args.design).is_file():
+        print("这块板有自己的 sim_profiles.yaml，仿真不会读刚才改的共用文件。")
+
+
+def _print_hook_result(repo: Path | None, changed: bool, *, removed: bool) -> None:
+    if repo is None:
+        print("未指定仓库，未改 hook。若某个仓库的 .cursor/hooks.json 写了这个名字，请加上 --repo 再执行一次。")
+        return
+    hooks_path = repo / ".cursor" / "hooks.json"
+    if changed and removed:
+        print(f"已从 hook 里去掉这个名字：{hooks_path}")
+        print("之后自动复核改用台账里最近一次仿真的 profile。")
+    elif changed:
+        print(f"已把 hook 里的名字一并改掉：{hooks_path}")
+    elif hooks_path.is_file():
+        print(f"hook 里没有这个名字：{hooks_path}")
+    else:
+        print(f"未找到 hook：{hooks_path}")
+
+
+def cmd_hook_stop(args: argparse.Namespace) -> int:
+    """Cursor stop hook: always exit 0 so a broken setup never blocks the agent."""
+    from benchgate import hooks
+
+    try:
+        payload = hooks.read_hook_payload()
+        result = {} if hooks.env_disabled() else hooks.run_stop_hook(payload, profile=args.profile, sim=not args.no_sim)
+    except Exception as exc:  # noqa: BLE001
+        print(f"benchgate hook stop: {exc}", file=sys.stderr)
+        result = {}
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def _note_shared_sim_profiles(args: argparse.Namespace) -> None:
+    """One stderr line when a sim command reads profiles from outside the project."""
+    if getattr(args, "profile", None) is None or not getattr(args, "design", None):
+        return
+    try:
+        p = benchgate_paths(args.design)
+    except Exception:  # noqa: BLE001 — a hint must never stop the command
+        return
+    if not (p.models / "manifest.yaml").is_file() or not p.sim_profile.is_file():
+        return
+    if p.sim_profile == (p.models / "sim_profiles.yaml").resolve():
+        return
+    print(
+        f"benchgate: 仿真配置 {args.profile} 来自本机共用文件 {p.sim_profile}，不在这个项目的仓库里。"
+        f"复制进项目：benchgate sim profile add {args.profile} --from {args.profile} --design {args.design} --local",
+        file=sys.stderr,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     from benchgate.instruments.errors import CapabilityError, ConfigError, InstrumentError
 
@@ -1035,7 +1337,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_design_arg(sc)
     sc.add_argument("--manifest", default=None, help="Override manifest path (default: <design>/models/manifest.yaml)")
     sc.add_argument("--out", default=None, help="Output directory (default: <design>/reports/sim_cosim)")
-    sc.add_argument("--profile", default="hbridge_pwm_closed")
+    sc.add_argument("--profile", required=True, help="sim_profiles.yaml block with the cosim settings")
     sc.set_defaults(func=cmd_sim_cosim)
     sd = sim_sub.add_parser(
         "diagnose",
@@ -1050,7 +1352,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_design_arg(stol)
     stol.add_argument("--manifest", default=None, help="Override manifest path")
     stol.add_argument("--out", default=None, help="Output directory (default: reports/mc_tolerance)")
-    stol.add_argument("--profile", default="charge_pump")
+    stol.add_argument("--profile", required=True, help="sim_profiles.yaml block to sample")
     stol.add_argument("--samples", type=int, default=200, help="LHS sample count (default 200)")
     stol.add_argument("--seed", type=int, default=42)
     stol.add_argument(
@@ -1085,6 +1387,59 @@ def main(argv: list[str] | None = None) -> int:
     stol.add_argument("--tran-stop", default=None, help="Override tran stop (e.g. 35m)")
     stol.add_argument("--maxstep", default=None, help="Override .options maxstep")
     stol.set_defaults(func=cmd_sim_tolerance)
+    pp = sim_sub.add_parser(
+        "profile",
+        help="List, copy, rename, or delete names in sim_profiles.yaml",
+    )
+    profile_sub = pp.add_subparsers(dest="profile_cmd", required=True)
+
+    def _profile_target(parser: argparse.ArgumentParser, *, mutate: bool = False) -> None:
+        parser.add_argument(
+            "--design",
+            default=None,
+            help="KiCad project root. Omit to use the shared catalog in BENCHGATE_HOME.",
+        )
+        parser.add_argument(
+            "--global",
+            dest="use_global",
+            action="store_true",
+            help="Use $BENCHGATE_HOME/config/sim_profiles.yaml",
+        )
+        parser.add_argument(
+            "--local",
+            dest="use_local",
+            action="store_true",
+            help="Use <design>/models/sim_profiles.yaml (this file replaces the shared catalog)",
+        )
+        if mutate:
+            parser.add_argument(
+                "--repo",
+                default=None,
+                help="Git repo whose .cursor/hooks.json should be updated (default: the repo containing --design)",
+            )
+            parser.add_argument("--force", action="store_true", help="Allow renaming or deleting the name default")
+
+    pl = profile_sub.add_parser("list", help="Show which file is in effect and the names in it")
+    _profile_target(pl)
+    pl.set_defaults(func=cmd_sim_profile_list)
+    pshow = profile_sub.add_parser("show", help="Print one profile block")
+    pshow.add_argument("name")
+    _profile_target(pshow)
+    pshow.set_defaults(func=cmd_sim_profile_show)
+    padd = profile_sub.add_parser("add", help="Copy an existing profile under a new name")
+    padd.add_argument("name")
+    padd.add_argument("--from", dest="source", required=True, help="Name to copy")
+    _profile_target(padd)
+    padd.set_defaults(func=cmd_sim_profile_add)
+    pren = profile_sub.add_parser("rename", help="Rename a profile; update this repo's stop hook when it names it")
+    pren.add_argument("old")
+    pren.add_argument("new")
+    _profile_target(pren, mutate=True)
+    pren.set_defaults(func=cmd_sim_profile_rename)
+    prm = profile_sub.add_parser("remove", help="Delete a profile name; drop it from this repo's stop hook")
+    prm.add_argument("name")
+    _profile_target(prm, mutate=True)
+    prm.set_defaults(func=cmd_sim_profile_remove)
 
     p_kicad = sub.add_parser("kicad", help="KiCad schematic utilities (KiCad 10-safe)")
     kicad_sub = p_kicad.add_subparsers(dest="kicad_cmd", required=True)
@@ -1110,6 +1465,7 @@ def main(argv: list[str] | None = None) -> int:
     wo.add_argument("--no-pipeline", action="store_true", help="Skip models/blocks.yaml sync")
     wo.add_argument("--no-gate", action="store_true", help="Skip gate report (spec + valid_range)")
     wo.add_argument("--no-auto-capture", action="store_true", help="Skip auto lab capture for pending parts")
+    wo.add_argument("--force", action="store_true", help="Run even if no KiCad/blocks change was detected since the last watch")
     wo.add_argument(
         "--auto-capture-dry-run",
         action="store_true",
@@ -1227,6 +1583,38 @@ def main(argv: list[str] | None = None) -> int:
     lc.add_argument("--tags", default=None, help="Comma-separated session tags (e.g. anomaly,baseline)")
     lc.add_argument("--out", default=None, help="Export captured waveform to CSV")
     lc.set_defaults(func=cmd_lab_capture)
+
+    limp = lab_sub.add_parser(
+        "import",
+        help="Store measurements benchgate did not capture (CSV, readings, files) as a Session",
+        description=(
+            "No instrument is touched. CSV: rows of numbers are data, first column is time, each further "
+            "column one channel; the original file is kept as an attachment."
+        ),
+    )
+    _add_design_arg(limp)
+    limp.add_argument("--wave", action="append", default=[], help="Waveform CSV (repeatable)")
+    limp.add_argument(
+        "--value",
+        action="append",
+        default=[],
+        help="Reading name=number[unit], e.g. vout=23.6V (repeatable)",
+    )
+    limp.add_argument("--file", action="append", default=[], help="Attachment: image, PDF, raw export (repeatable)")
+    limp.add_argument("--instrument", default=None, help="Where the data came from, e.g. 'DS1054Z USB export'")
+    limp.add_argument("--component-ref", dest="component_ref", default=None)
+    limp.add_argument("--tags", default=None, help="Comma-separated extra tags (import is always added)")
+    limp.add_argument("--notes", default=None, help="Stored in session.yaml (default: --purpose)")
+    limp.add_argument("--at", default=None, help="Measurement time, ISO-8601 (default now; no zone = local)")
+    limp.add_argument("--time-scale", dest="time_scale", type=float, default=1.0, help="Multiply the CSV time column (0.001 for ms)")
+    limp.add_argument(
+        "--sample-interval",
+        dest="sample_interval_s",
+        type=float,
+        default=None,
+        help="First column is a sample index; time = index × this many seconds",
+    )
+    limp.set_defaults(func=cmd_lab_import)
 
     lch = lab_sub.add_parser("characterize", help="Capture + fit + write subckt/manifest")
     _add_design_arg(lch)
@@ -1523,9 +1911,92 @@ def main(argv: list[str] | None = None) -> int:
     msrv = mcp_sub.add_parser("serve", help="Run MCP server on stdio exposing agent tools")
     msrv.set_defaults(func=cmd_mcp_serve)
 
+    p_index = sub.add_parser(
+        "index",
+        help="Record ledger: models/index.jsonl + models/INDEX.md",
+        description=(
+            "Every session, sim, sweep, tolerance study, gate and model build appends one line to "
+            "<design>/models/index.jsonl (rendered as models/INDEX.md)."
+        ),
+    )
+    index_sub = p_index.add_subparsers(dest="index_cmd", required=True)
+    ist = index_sub.add_parser("status", help="Latest record per kind, staleness, and what is not yet verified (exit 1 if unverified)")
+    _add_design_arg(ist)
+    ist.set_defaults(func=cmd_index_status)
+    ils = index_sub.add_parser("list", help="Search records, newest first")
+    _add_design_arg(ils)
+    ils.add_argument("--kind", default=None, choices=list(KIND_LABELS))
+    ils.add_argument("--status", default=None)
+    ils.add_argument("--since", default=None, help="ISO-8601 lower bound")
+    ils.add_argument("--until", default=None, help="ISO-8601 upper bound")
+    ils.add_argument("--tag", default=None)
+    ils.add_argument("--text", default=None, help="Substring match over the whole record")
+    ils.add_argument("--limit", type=int, default=30)
+    ils.add_argument("--json", action="store_true")
+    ils.set_defaults(func=cmd_index_list)
+    irb = index_sub.add_parser(
+        "rebuild",
+        help="Backfill sessions and the reports currently on disk (earlier overwritten reports cannot be recovered)",
+    )
+    _add_design_arg(irb)
+    irb.add_argument("--dry-run", action="store_true")
+    irb.set_defaults(func=cmd_index_rebuild)
+    irn = index_sub.add_parser("render", help="Regenerate models/INDEX.md")
+    _add_design_arg(irn)
+    irn.set_defaults(func=cmd_index_render)
+    ich = index_sub.add_parser(
+        "check",
+        help="Exit 1 if the gate is missing, stale or failing (used by the git pre-commit hook)",
+    )
+    _add_design_arg(ich)
+    ich.add_argument("--staged", action="store_true", help="Check only designs whose inputs are staged in the current git repo")
+    ich.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="With --staged: only point out ledger files left out of the commit; never block",
+    )
+    ich.set_defaults(func=cmd_index_check)
+
+    p_hooks = sub.add_parser("hooks", help="Install automatic triggers (Cursor stop hook + git pre-commit) into a repo")
+    hooks_sub = p_hooks.add_subparsers(dest="hooks_cmd", required=True)
+    hin = hooks_sub.add_parser("install", help="Write .cursor/hooks.json stop hook and .git/hooks/pre-commit")
+    hin.add_argument("--repo", default=".", help="Any path inside the target git repository")
+    hin.add_argument("--no-cursor", action="store_true", help="Skip the Cursor stop hook")
+    hin.add_argument("--no-git", action="store_true", help="Skip the git pre-commit hook")
+    hin.add_argument(
+        "--profile",
+        default=None,
+        help="Sim profile for automatic reviews (default: the profile of the last sim on record)",
+    )
+    hin.add_argument(
+        "--no-sim",
+        action="store_true",
+        help="Lab records only: the stop hook never simulates and pre-commit never blocks on the gate "
+        "(new sessions are still checked; ledger files left out of a commit are still pointed out)",
+    )
+    hin.set_defaults(func=cmd_hooks_install)
+    hun = hooks_sub.add_parser("uninstall", help="Remove benchgate's stop hook and pre-commit hook")
+    hun.add_argument("--repo", default=".")
+    hun.set_defaults(func=cmd_hooks_uninstall)
+
+    p_hook = sub.add_parser("hook", help="Hook entry points (called by Cursor, not by hand)")
+    hook_sub = p_hook.add_subparsers(dest="hook_cmd", required=True)
+    hst = hook_sub.add_parser("stop", help="Cursor stop hook: review designs whose inputs changed")
+    hst.add_argument("--profile", default=None)
+    hst.add_argument("--no-sim", action="store_true", help="Only check new lab records; never simulate")
+    hst.set_defaults(func=cmd_hook_stop)
+
     args = parser.parse_args(argv)
+    _note_shared_sim_profiles(args)
+    from benchgate.ledger import record_context
+
     try:
-        return args.func(args)
+        with record_context(
+            purpose=getattr(args, "purpose", None),
+            chat_id=getattr(args, "chat_id", None),
+            via="cli",
+        ):
+            return args.func(args)
     except ConfigError as exc:
         print(f"benchgate: configuration error: {exc}", file=sys.stderr)
         return 2

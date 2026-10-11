@@ -167,7 +167,7 @@ valid_range:
 | `mapping/engine.py` | 新增 `build_model()`（§2.3）；`apply_measured_model` 改为 `BenchModelProvider` 的薄封装 | 现有 `sync` 逻辑不变 |
 | `providers/`（新目录） | `base.py`(Protocol) / `bench.py` / `ltspice.py` | provider 实现 |
 | `cli.py` / `agent/tools.py` | 新增 `model build` / `model status`（§7） | 复用现有 dispatch 风格 |
-| `sim/netlist.py` | **不改** | 全局网表仍由 kicad-cli 产出；KiCad 导出特有的净名修正（`split_gate_drive_nets` / `inject_isense_path`）只作用于全局 KiCad 网表，与局部模型来源无关 |
+| `sim/netlist.py` | **不改** | 全局网表仍由 kicad-cli 产出；板子专用的净名修正写在该板 profile 的 `netlist_rewrite` / `netlist_append` 里，只作用于全局 KiCad 网表，与局部模型来源无关 |
 
 ### 4.1 `measured` → `provenance`（无向后兼容，直接切换）
 

@@ -38,9 +38,12 @@ def build_server():
 
     @server.call_tool()
     async def call_tool_handler(name: str, arguments: dict[str, Any] | None) -> list[Any]:
+        from benchgate.ledger import record_context
+
         payload = arguments or {}
         try:
-            result = dispatch(name, payload)
+            with record_context(via="mcp"):
+                result = dispatch(name, payload)
             text = json.dumps(result, indent=2, ensure_ascii=False, default=str)
         except Exception as exc:  # noqa: BLE001 — surface tool errors to MCP client
             text = json.dumps({"error": str(exc), "tool": name}, indent=2)

@@ -29,6 +29,13 @@ def _paths_for_design(design_dir: str | Path, args: dict[str, Any]):
     )
 
 
+def _required_profile(args: dict[str, Any], tool: str) -> str:
+    profile = args.get("profile")
+    if not profile:
+        raise ValueError(f"{tool} needs 'profile': the sim_profiles.yaml block to run (list them with `benchgate sim profile list`)")
+    return str(profile)
+
+
 def _role_overrides(args: dict[str, Any]) -> dict[str, str | None]:
     from benchgate.instruments.capabilities import ROLE_CAPABILITY
 
@@ -64,6 +71,17 @@ def _resolve_provenance_dict(args: dict[str, Any], key: str, existing: dict | No
 
 
 def dispatch(name: str, args: dict[str, Any]) -> Any:
+    """Run one tool. ``purpose`` and ``chat_id`` go to the record ledger, not the tool."""
+    from benchgate.ledger import record_context
+
+    args = dict(args or {})
+    purpose = args.pop("purpose", None)
+    chat_id = args.pop("chat_id", None)
+    with record_context(purpose=purpose, chat_id=chat_id):
+        return _dispatch(name, args)
+
+
+def _dispatch(name: str, args: dict[str, Any]) -> Any:
     if name not in TOOLS:
         raise KeyError(f"Unknown tool: {name}")
 
@@ -148,6 +166,27 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         entry = build_model(manifest, entry, provider, workdir=p.subckt)
         save_manifest(manifest, p.manifest, global_models_dir=p.global_models)
         prov = entry.provenance
+        from benchgate import ledger
+
+        ledger.append_record(
+            p.design,
+            "model_build",
+            status="ok",
+            summary={
+                k: v
+                for k, v in {
+                    "kicad_key": entry.kicad_key,
+                    "reference": entry.reference,
+                    "provider": provider_name,
+                    "subckt": str(entry.sim_library) if entry.sim_library else None,
+                    "sim_name": entry.sim_name,
+                    "warnings": prov.notes if prov else None,
+                }.items()
+                if v
+            },
+            artifacts=[p.manifest],
+            purpose=args.get("notes"),
+        )
         return {
             "kicad_key": entry.kicad_key,
             "provider": provider_name,
@@ -325,6 +364,26 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
         finally:
             inst.disconnect()
         return {"instrument": inst.name, "readings": readings}
+
+    if name == "lab_import":
+        from benchgate.lab.importer import import_session
+        from benchgate.ledger import _context
+
+        p = _paths_for_design(args["design_dir"], args)
+        return import_session(
+            p.captured,
+            design=str(p.design),
+            waveforms=args.get("waveforms"),
+            values=args.get("values"),
+            files=args.get("files"),
+            instrument=args.get("instrument"),
+            component_ref=args.get("component_ref"),
+            tags=args.get("tags"),
+            notes=args.get("notes") or _context.get().get("purpose") or "",
+            captured_at=args.get("captured_at"),
+            time_scale=float(args.get("time_scale", 1.0)),
+            sample_interval_s=args.get("sample_interval_s"),
+        )
 
     if name == "lab_capture_waveform":
         p = _paths_for_design(args["design_dir"], args)
@@ -707,7 +766,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir = resolve_project_path(p.design, out_dir, p.reports / "sim_cosim")
         elif not args.get("output_dir"):
             out_dir = p.reports / "sim_cosim"
-        profile = args.get("profile", "hbridge_pwm_closed")
+        profile = _required_profile(args, "sim_cosim")
         report, result = run_cosim(
             p.design,
             mp,
@@ -817,7 +876,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             out_dir,
             blocks_yaml=p.blocks_yaml,
             sim_profile_path=p.sim_profile,
-            profile=str(args.get("profile", "charge_pump")),
+            profile=_required_profile(args, "sim_tolerance"),
             n_samples=int(args.get("n_samples", 200)),
             seed=int(args.get("seed", 42)),
             strategy=str(args.get("strategy", "lhs")),
@@ -864,6 +923,7 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
             tolerance_strategy=str(args.get("tolerance_strategy", "auto")),
             tolerance_seed=int(args.get("tolerance_seed", 42)),
             tolerance_jobs=int(args.get("tolerance_jobs", 4)),
+            force=bool(args.get("force", False)),
         )
 
     if name == "watch_loop":
@@ -925,6 +985,31 @@ def dispatch(name: str, args: dict[str, Any]) -> Any:
 
     if name == "lab_thermal_watch":
         return _lab_thermal_watch(args)
+
+    if name == "index_status":
+        from benchgate import ledger
+
+        p = _paths_for_design(args["design_dir"], args)
+        return ledger.design_status(p.design)
+
+    if name == "index_query":
+        from benchgate import ledger
+
+        p = _paths_for_design(args["design_dir"], args)
+        records = ledger.query(
+            p.design,
+            kind=args.get("kind"),
+            status=args.get("status"),
+            since=args.get("since"),
+            until=args.get("until"),
+            tag=args.get("tag"),
+            text=args.get("text"),
+            limit=int(args.get("limit", 20)),
+        )
+        for rec in records:
+            rec.pop("input_files", None)
+            rec["line"] = ledger.summary_line(rec)
+        return {"records": records}
 
     raise NotImplementedError(name)
 

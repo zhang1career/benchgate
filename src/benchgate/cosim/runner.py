@@ -23,8 +23,17 @@ from benchgate.cosim.pwm_drive import (
     resolve_stage,
 )
 from benchgate.sim.analysis import SimCheckReport, analyze_raw_file, load_profile_checks, parse_ngspice_raw
-from benchgate.sim.netlist import format_rload, prepare_netlist
+from benchgate.sim.netlist import prepare_netlist
 from benchgate.sim.runner import SimResult, run_ngspice
+
+_VOUT = "/H-Bridge_Power/VOUT"
+_ISENSE_RAW = "/H-Bridge_Power/ISENSE_RAW"
+
+
+def format_rload(rload_ohm: float) -> str:
+    """Load resistor between VOUT and ISENSE_RAW (J2 differential output) on the h-bridge plant."""
+    return f"RLOAD {_VOUT} {_ISENSE_RAW} {rload_ohm:g}"
+
 
 _PWM_SOURCE_RE = re.compile(r"^VPWM_(HIN1|LIN1|HIN2|LIN2)\s", re.MULTILINE)
 _V1_RE = re.compile(r"^V1\s", re.MULTILINE)
@@ -237,7 +246,7 @@ def run_cosim(
     output_dir: Path,
     *,
     sim_profile_path: Path,
-    profile: str = "hbridge_pwm_closed",
+    profile: str,
     build_dir: Path | None = None,
 ) -> tuple[CosimReport, SimResult]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -349,4 +358,7 @@ def run_cosim(
         timeline_path=str(timeline_path),
     )
     (output_dir / "cosim_report.json").write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    from benchgate import ledger
+
+    ledger.record_report(design_dir, "cosim", report.to_dict(), output_dir / "cosim_report.json")
     return report, result or SimResult(False, "", "", None, None)

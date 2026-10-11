@@ -713,5 +713,46 @@ def write_gate_report(
         block_sweep_report_path=block_sweep_report_path,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    payload = report.to_dict()
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _record_gate(
+        payload,
+        manifest_path=manifest_path,
+        output_path=output_path,
+        design_dir=design_dir,
+        inputs=(sim_report_path, stress_sweep_path, monte_carlo_path, block_sweep_report_path),
+        profile=profile,
+    )
     return report
+
+
+def _record_gate(
+    payload: dict,
+    *,
+    manifest_path: Path,
+    output_path: Path,
+    design_dir: Path | None,
+    inputs: tuple[Path | None, ...],
+    profile: str,
+) -> None:
+    from benchgate import ledger
+
+    design = (
+        Path(design_dir).resolve()
+        if design_dir
+        else ledger.design_from_manifest(manifest_path) or ledger.find_design_dir(output_path)
+    )
+    if design is None:
+        return
+    parents: list[str] = []
+    for path in inputs:
+        if path is not None and Path(path).exists():
+            parents += ledger.parent_for_artifact(design, path)
+    summary = payload.get("summary") or {}
+    parents += ledger.collect_session_ids(
+        {"comparisons": summary.get("comparisons"), "thermal": summary.get("thermal"), "entries": payload.get("entries")}
+    )
+    extra: dict = {"profile": profile}
+    if ledger.design_from_manifest(manifest_path) != design:
+        extra["scope"] = "alt"
+    ledger.record_report(design, "gate", payload, output_path, parents=list(dict.fromkeys(parents)), extra=extra)
